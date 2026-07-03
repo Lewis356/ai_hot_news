@@ -30,21 +30,20 @@ jobs:
         with:
           python-version: "3.11"
           cache: "pip"
-          cache-dependency-path: ai_hot_news/requirements.txt
+          cache-dependency-path: requirements.txt
+
+      # repo 根就是 ai_hot_news/,不要再 working-directory。
 
       - name: Install dependencies
-        working-directory: ai_hot_news
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Prepare logs directory
         # .gitignore 排除了 logs/,runner checkout 后不会存在,setup_logging 会写失败。
-        working-directory: ai_hot_news
         run: mkdir -p logs
 
       - name: Verify required secrets
-        working-directory: ai_hot_news
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
@@ -62,7 +61,6 @@ jobs:
           echo "Secrets present. Provider: $(python -c 'import yaml,sys; print(yaml.safe_load(open(\"config.yaml\"))[\"ai\"][\"provider\"])')"
 
       - name: Run daily digest
-        working-directory: ai_hot_news
         env:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -79,6 +77,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: digest-log-${{ github.run_id }}
-          path: ai_hot_news/logs/
+          path: logs/
           if-no-files-found: ignore
           retention-days: 7
