@@ -1,0 +1,84 @@
+name: Daily AI News Digest
+
+# 触发条件:
+#   1. 每天 UTC 16:00(=北京时间次日 00:00)自动跑
+#   2. Actions 页面手动触发(用来测试 secrets 是否配对)
+on:
+  schedule:
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+# 防止上一次还没跑完就叠加触发(网络/AI 卡住时偶尔会拖过 24h)
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10   # 留足 LLM 评估时间(本地测 ~16s,云端首跑可能冷启 + 重试)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: ai_hot_news/requirements.txt
+
+      - name: Install dependencies
+        working-directory: ai_hot_news
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare logs directory
+        # .gitignore 排除了 logs/,runner checkout 后不会存在,setup_logging 会写失败。
+        working-directory: ai_hot_news
+        run: mkdir -p logs
+
+      - name: Verify required secrets
+        working-directory: ai_hot_news
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEEPSEEK_API_KEY" ]; then
+            echo "::error::DEEPSEEK_API_KEY is not set — go to Settings → Secrets → Actions."
+            exit 1
+          fi
+          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
+            echo "::error::FEISHU_WEBHOOK_URL is not set."
+            exit 1
+          fi
+          echo "Secrets present. Provider: $(python -c 'import yaml,sys; print(yaml.safe_load(open(\"config.yaml\"))[\"ai\"][\"provider\"])')"
+
+      - name: Run daily digest
+        working-directory: ai_hot_news
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+          # 强制 UTF-8,日志/卡片里的中文不被 mojibake
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: python run_once.py
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-log-${{ github.run_id }}
+          path: ai_hot_news/logs/
+          if-no-files-found: ignore
+          retention-days: 7

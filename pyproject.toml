@@ -1,0 +1,74 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-hot-news"
+version = "0.2.0"
+description = "AI news digest: RSS → LLM evaluate → Feishu card, daily cron"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [{name = "AI Hot News Contributors"}]
+keywords = ["rss", "ai", "news", "feishu", "lark", "digest"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "feedparser>=6.0.11,<7",
+    "httpx>=0.27.2,<1",
+    "openai>=1.55.0,<2",
+    "apscheduler>=3.10.4,<4",
+    "loguru>=0.7.2,<1",
+    "pyyaml>=6.0.2,<7",
+    "python-dotenv>=1.0.1,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "respx>=0.21",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+]
+
+[project.scripts]
+ai-news-digest = "main:main"
+ai-news-run-once = "run_once:main"
+
+[tool.setuptools]
+packages = ["src", "src.fetcher", "src.processor", "src.evaluator", "src.publisher", "src.utils", "src.observability"]
+include-package-data = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:feedparser.*",
+    "ignore::DeprecationWarning:apscheduler.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B008"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_unused_ignores = true
+ignore_missing_imports = true

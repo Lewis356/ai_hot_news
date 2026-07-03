@@ -1,0 +1,26 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+logs/
+.env
+.env.*
+!.env.example
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Build artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

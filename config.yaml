@@ -1,0 +1,25 @@
+rss_sources:
+  - name: "36氪"
+    url: "https://36kr.com/feed"
+  - name: "量子位"
+    url: "https://www.qbitai.com/feed"
+  - name: "TechCrunch AI"
+    url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+
+schedule:
+  cron_hour: 0
+  cron_minute: 0
+
+ai:
+  provider: "deepseek"
+  deepseek_model: "deepseek-chat"
+  openai_model: "gpt-4o-mini"
+  ollama_model: "qwen2.5:7b"
+  max_candidates: 60
+  top_n: 10
+
+dedup:
+  title_similarity_threshold: 0.80
+
+logging:
+  retention_days: 30
