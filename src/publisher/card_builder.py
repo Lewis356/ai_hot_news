@@ -114,6 +114,7 @@ def build_card(
     date: datetime,
     provider: str | None = None,
     pipeline_counts: dict[str, int] | None = None,
+    digest_id: str | None = None,
 ) -> dict:
     """Build a Feishu interactive card from evaluated news items.
 
@@ -235,7 +236,10 @@ def build_card(
         "elements": [
             {
                 "tag": "plain_text",
-                "content": f"⏱ 报告生成于 {time_str} {timezone_name}",
+                "content": (
+                    f"⏱ 报告生成于 {time_str} {timezone_name}"
+                    + (f" · {digest_id}" if digest_id else "")
+                ),
             }
         ],
     })

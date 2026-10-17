@@ -93,7 +93,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 | 飞书 403 / 签名失败 | `FEISHU_WEBHOOK_SECRET` 和飞书后台"签名校验"里显示的不一致 |
 | 评估超时 (10 min) | DeepSeek 偶发;在 [main.py](main.py) 留可重试,或把 `timeout-minutes` 调到 15 |
 | 出现 `ModuleNotFoundError` | 检查 `working-directory: ai_hot_news` 是否生效(子目录场景容易漏) |
-| RSS 抓取空 | 源站临时 403/限流;看 artifact 里的日志 `METRICS` 行 |
+| RSS 抓取空 | 源站临时 403/限流;看 artifact 里的日志 `RUN_SUMMARY` 行 |
 
 ## 关闭 / 暂停
 

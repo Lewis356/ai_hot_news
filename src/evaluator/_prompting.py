@@ -49,3 +49,12 @@ def build_user_prompt(items: list[NewsItem], top_n: int) -> str:
         "以下 JSON 是待评估的候选新闻数据。请选择最重要的新闻：\n"
         f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
     )
+
+
+def build_correction_prompt(raw: str, error: str) -> str:
+    """Ask for one schema-only correction without changing candidate facts."""
+    return (
+        "上一个输出未通过结构校验。只修正 JSON，不要解释，也不要新增字段。\n"
+        f"校验错误：{error}\n"
+        f"上一个输出：{raw}"
+    )

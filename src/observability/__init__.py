@@ -2,7 +2,7 @@
 
 The intent is *deliberately* small: a context manager that times a stage
 and a dataclass that aggregates counts so we can emit a single
-``METRICS {...}`` log line at the end. No external dep, no Prometheus.
+``RUN_SUMMARY {...}`` log line at the end. No external dep, no Prometheus.
 """
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ class Metrics:
     can see which RSS feeds failed silently.
     """
 
+    run_id: str = ""
+    digest_id: str = ""
     fetched: int = 0
     deduped: int = 0
     recent: int = 0
@@ -35,8 +37,10 @@ class Metrics:
     provider_requested: str = ""
     provider_used: str = ""
     fallback_used: bool = False
+    fallback_reason: str | None = None
     publish_outcome: str = "not_attempted"
     status: str = "running"
+    failure_reason: str | None = None
     degraded: bool = False
 
     def to_json(self) -> str:
@@ -55,9 +59,9 @@ def step_timer(metrics: Metrics, name: str) -> Iterator[None]:
         logger.debug(f"step '{name}' took {elapsed_ms} ms")
 
 
-def emit_metrics(metrics: Metrics) -> None:
-    """Emit the canonical ``METRICS {...}`` log line for downstream parsers."""
-    logger.info(f"METRICS {metrics.to_json()}")
+def emit_run_summary(metrics: Metrics) -> None:
+    """Emit the only structured end-of-run summary line."""
+    logger.info(f"RUN_SUMMARY {metrics.to_json()}")
 
 
-__all__ = ["Metrics", "step_timer", "emit_metrics"]
+__all__ = ["Metrics", "step_timer", "emit_run_summary"]

@@ -79,7 +79,7 @@ jobs:
         shell: bash
         run: |
           echo "## 每日 AI 新闻" >> "$GITHUB_STEP_SUMMARY"
-          summary="$(grep -h 'METRICS ' logs/*.log 2>/dev/null | tail -n 1 || true)"
+          summary="$(grep -h 'RUN_SUMMARY ' logs/*.log 2>/dev/null | tail -n 1 || true)"
           if [ -n "$summary" ]; then
             echo "$summary" >> "$GITHUB_STEP_SUMMARY"
           else

@@ -4,9 +4,11 @@ from __future__ import annotations
 import httpx
 from loguru import logger
 
-from src.evaluator._prompting import SYSTEM_PROMPT, build_user_prompt
+from src.evaluator._prompting import (
+    SYSTEM_PROMPT,
+    build_user_prompt,
+)
 from src.evaluator.base import BaseEvaluator
-from src.evaluator.json_parser import extract_json_from_text
 from src.models import EvaluatedItem, NewsItem
 
 
@@ -34,14 +36,17 @@ class OllamaEvaluator(BaseEvaluator):
         api_url = f"{base_url}/v1/chat/completions"
         prompt = build_user_prompt(candidates, top_n)
 
-        def _call() -> str:
+        def _call(correction_prompt: str | None = None) -> str:
+            messages = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+            if correction_prompt:
+                messages.append({"role": "user", "content": correction_prompt})
             with httpx.Client(timeout=timeout) as client:
                 resp = client.post(api_url, json={
                     "model": model,
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
+                    "messages": messages,
                     "stream": False,
                     "options": {"temperature": 0.1, "num_predict": 4096},
                 })
@@ -49,12 +54,8 @@ class OllamaEvaluator(BaseEvaluator):
                 payload = resp.json()
             return payload["choices"][0]["message"]["content"]
 
-        raw = self._retry_call(_call, max_retries=max_retries, label="Ollama")
-        if raw is None:
-            return []
-        data = extract_json_from_text(raw)
-        results = self._build_evaluated_items(
-            data.get("items", []), candidates, top_n
+        results = self._evaluate_with_correction(
+            _call, candidates, top_n, max_retries, "Ollama"
         )
         logger.info(f"Ollama evaluated: {len(results)} items (Top {top_n})")
         return results

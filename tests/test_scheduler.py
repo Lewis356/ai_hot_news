@@ -119,6 +119,7 @@ def test_step_evaluate_records_actual_provider():
     assert metrics.provider_requested == "deepseek"
     assert metrics.provider_used == "rule"
     assert metrics.fallback_used is True
+    assert metrics.fallback_reason == "primary provider returned no items"
 
 
 def test_step_publish_builds_card_and_posts():
@@ -213,6 +214,45 @@ def test_run_daily_digest_sends_empty_card_after_successful_empty_fetch():
     assert "暂无更新" in str(mock_send.call_args.args[0])
 
 
+def test_run_daily_digest_does_not_claim_empty_when_another_source_failed():
+    batch = FetchBatch(
+        sources=[
+            SourceFetchResult("Empty", "ok"),
+            SourceFetchResult("Offline", "http_error", error="timeout"),
+        ]
+    )
+
+    with patch("src.scheduler.fetch_all_with_report", return_value=batch), patch(
+        "src.scheduler.send_card"
+    ) as mock_send:
+        result = run_daily_digest(make_config(), now=NOW)
+
+    assert result.status is DigestStatus.FETCH_FAILED
+    assert result.exit_code == 1
+    mock_send.assert_not_called()
+
+
+def test_run_daily_digest_does_not_claim_empty_after_filter_when_source_failed():
+    old_item = make_news_item("Old")
+    old_item.published_at = datetime(2026, 10, 15, tzinfo=timezone.utc)
+    batch = FetchBatch(
+        items=[old_item],
+        sources=[
+            SourceFetchResult("Stale", "ok", items=[old_item]),
+            SourceFetchResult("Offline", "http_error", error="timeout"),
+        ],
+    )
+
+    with patch("src.scheduler.fetch_all_with_report", return_value=batch), patch(
+        "src.scheduler.send_card"
+    ) as mock_send:
+        result = run_daily_digest(make_config(), now=NOW)
+
+    assert result.status is DigestStatus.FETCH_FAILED
+    assert result.metrics.failure_reason == "No recent items and some RSS sources failed"
+    mock_send.assert_not_called()
+
+
 def test_run_daily_digest_dry_run_never_publishes():
     batch = make_batch([make_news_item("A")])
 
@@ -240,3 +280,18 @@ def test_run_daily_digest_publish_unknown_is_a_failure():
     assert result.exit_code == 1
     assert result.metrics.publish_outcome == "unknown"
     assert result.failure_reason == "read timeout"
+    assert result.metrics.failure_reason == "read timeout"
+
+
+def test_run_summary_has_stable_digest_id_and_unique_run_id():
+    batch = make_batch([make_news_item("A")])
+
+    with patch("src.scheduler.fetch_all_with_report", return_value=batch), patch(
+        "src.scheduler.send_card", return_value=PublishResult(PublishStatus.SENT)
+    ):
+        first = run_daily_digest(make_config(), now=NOW)
+        second = run_daily_digest(make_config(), now=NOW)
+
+    assert first.metrics.digest_id == "ai-news-2026-10-17"
+    assert first.metrics.run_id
+    assert first.metrics.run_id != second.metrics.run_id

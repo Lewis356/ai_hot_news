@@ -9,7 +9,7 @@ from src.fetcher.rss_fetcher import fetch_all, fetch_all_with_report, fetch_sing
 
 
 def _make_entry(
-    title="", link="", summary="", published_parsed=None, updated_parsed=None
+    title="", link="", summary="", published_parsed=None, updated_parsed=None, entry_id=None
 ):
     """Create a feedparser-like entry with attribute access."""
     return SimpleNamespace(
@@ -18,6 +18,7 @@ def _make_entry(
         summary=summary,
         published_parsed=published_parsed,
         updated_parsed=updated_parsed,
+        id=entry_id,
     )
 
 
@@ -42,11 +43,39 @@ def test_fetch_single_returns_news_items():
     with patch("httpx.get", return_value=_mock_response()), patch(
         "feedparser.parse", return_value=mock_feed
     ):
-        items = fetch_single("TestSource", "https://example.com/rss", timeout=10)
+        result = fetch_single("TestSource", "https://example.com/rss", timeout=10)
+        items = result.items
+        assert result.status == "ok"
         assert len(items) == 1
         assert items[0].title == "GPT-5 Announced"
         assert items[0].source == "TestSource"
         assert items[0].url == "https://example.com/gpt5"
+        assert items[0].item_id
+
+
+def test_fetcher_uses_entry_guid_for_stable_identity():
+    feed = SimpleNamespace(
+        bozo=False,
+        entries=[
+            _make_entry(
+                title="First title",
+                link="https://example.com/one",
+                entry_id="stable-guid",
+            ),
+            _make_entry(
+                title="Changed title",
+                link="https://example.com/two",
+                entry_id="stable-guid",
+            ),
+        ],
+    )
+
+    with patch("httpx.get", return_value=_mock_response()), patch(
+        "feedparser.parse", return_value=feed
+    ):
+        items = fetch_single("Source", "https://example.com/rss").items
+
+    assert items[0].item_id == items[1].item_id
 
 
 def test_fetch_single_handles_missing_fields():
@@ -58,7 +87,9 @@ def test_fetch_single_handles_missing_fields():
     with patch("httpx.get", return_value=_mock_response()), patch(
         "feedparser.parse", return_value=mock_feed
     ):
-        items = fetch_single("TestSource", "https://example.com/rss", timeout=10)
+        result = fetch_single("TestSource", "https://example.com/rss", timeout=10)
+        items = result.items
+        assert result.status == "ok"
         assert len(items) == 1
         assert items[0].url == ""
         assert items[0].summary == ""
@@ -68,8 +99,9 @@ def test_fetch_single_handles_exception():
     with patch("httpx.get", return_value=_mock_response()), patch(
         "feedparser.parse", side_effect=Exception("Parser crashed")
     ):
-        items = fetch_single("BadSource", "https://bad.example.com/rss", timeout=10)
-        assert items == []
+        result = fetch_single("BadSource", "https://bad.example.com/rss", timeout=10)
+        assert result.items == []
+        assert result.status == "parse_error"
 
 
 def test_fetch_single_bozo_no_entries():
@@ -81,8 +113,9 @@ def test_fetch_single_bozo_no_entries():
     with patch("httpx.get", return_value=_mock_response()), patch(
         "feedparser.parse", return_value=mock_feed
     ):
-        items = fetch_single("BadFeed", "https://bad.example.com/rss", timeout=10)
-        assert items == []
+        result = fetch_single("BadFeed", "https://bad.example.com/rss", timeout=10)
+        assert result.items == []
+        assert result.status == "parse_error"
 
 
 def test_fetch_all_aggregates_sources(monkeypatch):

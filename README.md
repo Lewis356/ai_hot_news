@@ -13,7 +13,7 @@
 - 🎨 **飞书卡片** — 排名徽章(🥇🥈🥉)、五档重要性 emoji、配色随头条变化。
 - 🔐 **强制签名** — 正式推送必须配置飞书 HMAC 签名密钥。
 - 🛡️ **输出沙箱** — LLM 返回值自动 clamp / 转义,杜绝 Markdown 注入。
-- 📊 **可观测** — 每阶段耗时、每源成功率、单行 METRICS 汇总。
+- 📊 **可观测** — 每阶段耗时、每源成功率、单行 RUN_SUMMARY 汇总。
 - 🧪 **测试完备** — `pytest -q` 全绿;新增 HMAC、转义、sanitize、卡片美化测试。
 
 ## 🚀 5 分钟快速开始
@@ -135,7 +135,7 @@ pytest -q
 A: 飞书群 → 群机器人 → 添加机器人 → 选"自定义机器人" → "安全设置" 勾选"签名校验",复制 secret 粘贴到 `.env` 的 `FEISHU_WEBHOOK_SECRET`。
 
 **Q: Pipeline 全程失败,如何排查?**
-A: 看 `logs/daily_YYYY-MM-DD.log` 最末的 `METRICS {...}`；`status`、逐源状态、实际 Provider 和投递结果都会记录。失败会返回非零退出码，使 GitHub Actions 正确标红。
+A: 看 `logs/daily_YYYY-MM-DD.log` 最末的 `RUN_SUMMARY {...}`；`status`、逐源状态、实际 Provider 和投递结果都会记录。失败会返回非零退出码，使 GitHub Actions 正确标红。
 
 **Q: 怎么换 RSS 源?**
 A: 编辑 `config.yaml` 的 `rss_sources`,保持 `{name, url}` 格式即可。

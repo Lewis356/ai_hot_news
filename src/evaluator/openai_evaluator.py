@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from loguru import logger
 from openai import OpenAI
+from openai.types.chat import ChatCompletionMessageParam
 
-from src.evaluator._prompting import SYSTEM_PROMPT, build_user_prompt
+from src.evaluator._prompting import (
+    SYSTEM_PROMPT,
+    build_user_prompt,
+)
 from src.evaluator.base import BaseEvaluator
-from src.evaluator.json_parser import extract_json_from_text
 from src.models import EvaluatedItem, NewsItem
 
 
@@ -34,13 +37,16 @@ class OpenAiEvaluator(BaseEvaluator):
         )
         prompt = build_user_prompt(candidates, top_n)
 
-        def _call() -> str:
+        def _call(correction_prompt: str | None = None) -> str:
+            messages: list[ChatCompletionMessageParam] = [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ]
+            if correction_prompt:
+                messages.append({"role": "user", "content": correction_prompt})
             response = client.chat.completions.create(
                 model=model,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
+                messages=messages,
                 response_format={"type": "json_object"},
                 max_tokens=4096,
                 temperature=0.1,
@@ -50,12 +56,8 @@ class OpenAiEvaluator(BaseEvaluator):
                 raise ValueError("OpenAI returned an empty response")
             return content
 
-        raw = self._retry_call(_call, max_retries=max_retries, label="OpenAI")
-        if raw is None:
-            return []
-        data = extract_json_from_text(raw)
-        results = self._build_evaluated_items(
-            data.get("items", []), candidates, top_n
+        results = self._evaluate_with_correction(
+            _call, candidates, top_n, max_retries, "OpenAI"
         )
         logger.info(f"OpenAI evaluated: {len(results)} items (Top {top_n})")
         return results

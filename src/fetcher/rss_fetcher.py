@@ -1,11 +1,13 @@
 """RSS feed fetcher with concurrent source support and per-source reporting."""
 from __future__ import annotations
 
+import hashlib
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
+from urllib.parse import urldefrag
 
 import feedparser
 import httpx
@@ -65,9 +67,9 @@ class FetchBatch:
         return {source.name: source.as_report() for source in self.sources}
 
 
-def fetch_single(name: str, url: str, timeout: int = 15) -> list[NewsItem]:
-    """Fetch and parse a single RSS feed. Returns empty list on failure."""
-    return _fetch_source(name, url, timeout).items
+def fetch_single(name: str, url: str, timeout: int = 15) -> SourceFetchResult:
+    """Fetch one RSS feed and retain whether it failed or was empty."""
+    return _fetch_source(name, url, timeout)
 
 
 def _fetch_source(name: str, url: str, timeout: int) -> SourceFetchResult:
@@ -122,13 +124,17 @@ def _fetch_source(name: str, url: str, timeout: int) -> SourceFetchResult:
     items = []
     for entry in feed.entries:
         published_at = _entry_published_at(entry)
+        title = getattr(entry, "title", "").strip()
+        url = getattr(entry, "link", "")
+        summary = getattr(entry, "summary", "")
 
         items.append(NewsItem(
-            title=getattr(entry, "title", "").strip(),
-            url=getattr(entry, "link", ""),
-            summary=getattr(entry, "summary", ""),
+            title=title,
+            url=url,
+            summary=summary,
             source=name,
             published_at=published_at,
+            item_id=_entry_identity(name, entry, title, url, summary),
         ))
 
     logger.info(f"Fetched {len(items)} items from {name}")
@@ -159,6 +165,14 @@ def _entry_published_at(entry) -> datetime | None:
         except (ValueError, TypeError):
             continue
     return None
+
+
+def _entry_identity(name: str, entry, title: str, url: str, summary: str) -> str:
+    """Return a stable source-scoped identity for one feed entry."""
+    raw_id = str(getattr(entry, "id", "") or getattr(entry, "guid", "")).strip()
+    normalized_url = urldefrag(url.strip())[0]
+    basis = raw_id or normalized_url or f"{title.strip()}\n{summary.strip()}"
+    return hashlib.sha256(f"{name}\0{basis}".encode()).hexdigest()
 
 
 def fetch_all(

@@ -76,7 +76,7 @@ def _safe_evaluate(
             reason,
         )
     if not evaluated and provider != "rule":
-        reason = "primary provider returned no items"
+        reason = evaluator.last_error or "primary provider returned no items"
         logger.error(
             f"Provider '{provider}' returned no items. "
             "Falling back to rule-based evaluator."
@@ -97,7 +97,7 @@ def evaluate_news(
     """Evaluate and rank news items using the configured AI provider.
 
     Falls back to rule-based evaluation if the primary provider raises.
-    Returns an empty list when ``items`` is empty.
+    Empty input returns an ``EvaluationResult`` whose ``items`` is empty.
     """
     if not items:
         logger.info("No candidate news items to evaluate")

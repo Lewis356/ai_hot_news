@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from loguru import logger
@@ -11,7 +12,7 @@ from loguru import logger
 from src.evaluator import EvaluationResult, evaluate_news
 from src.fetcher.rss_fetcher import FetchBatch, fetch_all_with_report
 from src.models import EvaluatedItem, NewsItem
-from src.observability import Metrics, emit_metrics, step_timer
+from src.observability import Metrics, emit_run_summary, step_timer
 from src.processor.dedup import deduplicate
 from src.processor.filter import filter_recent
 from src.publisher.card_builder import build_card
@@ -32,10 +33,19 @@ class DigestStatus(str, Enum):
 class DigestResult:
     status: DigestStatus
     metrics: Metrics
-    provider_requested: str = ""
-    provider_used: str = ""
-    fallback_used: bool = False
     failure_reason: str | None = None
+
+    @property
+    def provider_requested(self) -> str:
+        return self.metrics.provider_requested
+
+    @property
+    def provider_used(self) -> str:
+        return self.metrics.provider_used
+
+    @property
+    def fallback_used(self) -> bool:
+        return self.metrics.fallback_used
 
     @property
     def exit_code(self) -> int:
@@ -90,6 +100,7 @@ def step_evaluate(
     metrics.provider_requested = result.requested_provider
     metrics.provider_used = result.used_provider
     metrics.fallback_used = result.fallback_used
+    metrics.fallback_reason = result.fallback_reason
     metrics.degraded = metrics.degraded or result.fallback_used
     return result
 
@@ -109,6 +120,7 @@ def _build_digest_card(
             "recent": metrics.recent,
             "evaluated": metrics.evaluated,
         },
+        digest_id=metrics.digest_id,
     )
 
 
@@ -131,14 +143,12 @@ def _finish(
     failure_reason: str | None = None,
 ) -> DigestResult:
     metrics.status = status.value
-    emit_metrics(metrics)
+    metrics.failure_reason = redact(failure_reason)[:200] if failure_reason else None
+    emit_run_summary(metrics)
     return DigestResult(
         status=status,
         metrics=metrics,
-        provider_requested=metrics.provider_requested,
-        provider_used=metrics.provider_used,
-        fallback_used=metrics.fallback_used,
-        failure_reason=failure_reason,
+        failure_reason=metrics.failure_reason,
     )
 
 
@@ -178,7 +188,11 @@ def run_daily_digest(
     timezone_name = config.schedule.get("timezone", "Asia/Shanghai")
     local_timezone = ZoneInfo(timezone_name)
     run_time = now.astimezone(local_timezone) if now else datetime.now(local_timezone)
-    metrics = Metrics(provider_requested=config.ai.get("provider", "deepseek"))
+    metrics = Metrics(
+        run_id=uuid4().hex,
+        digest_id=f"ai-news-{run_time:%Y-%m-%d}",
+        provider_requested=config.ai.get("provider", "deepseek"),
+    )
 
     batch = step_fetch(config, metrics)
     if not batch.sources or not any(source.ok for source in batch.sources):
@@ -190,11 +204,25 @@ def run_daily_digest(
         )
 
     if not batch.items:
+        if metrics.failed_sources:
+            logger.error("Some RSS sources failed, so an empty digest cannot be trusted")
+            return _finish(
+                DigestStatus.FETCH_FAILED,
+                metrics,
+                "No items were fetched and some RSS sources failed",
+            )
         logger.info("RSS fetch succeeded but returned no items; publishing an empty card")
         return _deliver([], config, run_time, metrics, empty=True, dry_run=dry_run)
 
     items = step_filter(batch.items, metrics, now=run_time)
     if not items:
+        if metrics.failed_sources:
+            logger.error("Some RSS sources failed, so an empty digest cannot be trusted")
+            return _finish(
+                DigestStatus.FETCH_FAILED,
+                metrics,
+                "No recent items and some RSS sources failed",
+            )
         logger.info("No dated news was published in the last 24 hours")
         return _deliver([], config, run_time, metrics, empty=True, dry_run=dry_run)
     items = step_dedup(items, config, metrics)

@@ -102,6 +102,20 @@ def test_falls_back_to_rule_on_empty_primary_output():
     assert result.fallback_reason == "primary provider returned no items"
 
 
+def test_fallback_keeps_provider_error_summary():
+    item = NewsItem("Test", "http://a.com/1", "", "S", now())
+
+    with patch("src.evaluator.deepseek_evaluator.OpenAI", create=True) as client:
+        client.return_value.chat.completions.create.side_effect = Exception(
+            "Insufficient Balance"
+        )
+        result = evaluate_news([item], make_config())
+
+    assert result.used_provider == "rule"
+    assert result.fallback_reason is not None
+    assert "Insufficient Balance" in result.fallback_reason
+
+
 def test_rule_provider_does_not_double_fallback():
     items = [NewsItem("Test", "http://a.com/1", "", "S", now())]
     result = evaluate_news(items, make_config(ai={"provider": "rule", "top_n": 5}))
@@ -233,3 +247,75 @@ def test_model_output_with_provenance_fields_triggers_rule_fallback():
     assert "unexpected fields" in result.fallback_reason
     assert result.items[0].url == item.url
     assert result.items[0].source == item.source
+
+
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        '"chinese_summary": "", "importance": 8, "keywords": ["AI"]',
+        '"chinese_summary": "摘要", "importance": 11, "keywords": ["AI"]',
+        '"chinese_summary": "摘要", "importance": 8, '
+        '"keywords": ["1", "2", "3", "4", "5"]',
+    ],
+)
+def test_invalid_model_content_triggers_rule_fallback(invalid_fields):
+    item = NewsItem("Original", "https://trusted.example/1", "", "Source", now())
+    content = (
+        '{"items": [{"candidate_id": 1, "title": "标题", '
+        f"{invalid_fields}" + "}]}"
+    )
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=content))]
+    )
+
+    with patch("src.evaluator.deepseek_evaluator.OpenAI", create=True) as client:
+        client.return_value.chat.completions.create.return_value = response
+        result = evaluate_news([item], make_config())
+
+    assert result.used_provider == "rule"
+    assert result.fallback_used is True
+
+
+def test_invalid_model_output_gets_one_correction_attempt():
+    item = NewsItem("Original", "https://trusted.example/1", "", "Source", now())
+    invalid = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=(
+            '{"items": [{"candidate_id": 1, "title": "标题", '
+            '"chinese_summary": "", "importance": 8, "keywords": ["AI"]}]}'
+        )))]
+    )
+    corrected = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=(
+            '{"items": [{"candidate_id": 1, "title": "标题", '
+            '"chinese_summary": "有效摘要", "importance": 8, "keywords": ["AI"]}]}'
+        )))]
+    )
+
+    with patch("src.evaluator.deepseek_evaluator.OpenAI", create=True) as client:
+        client.return_value.chat.completions.create.side_effect = [invalid, corrected]
+        result = evaluate_news([item], make_config())
+
+    assert result.used_provider == "deepseek"
+    assert result.fallback_used is False
+    assert result.items[0].chinese_summary == "有效摘要"
+    assert client.return_value.chat.completions.create.call_count == 2
+
+
+def test_top_level_list_output_gets_one_correction_attempt():
+    item = NewsItem("Original", "https://trusted.example/1", "", "Source", now())
+    invalid = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content="[]"))]
+    )
+    corrected = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=(
+            '{"items": [{"candidate_id": 1, "title": "标题", '
+            '"chinese_summary": "有效摘要", "importance": 8, "keywords": ["AI"]}]}'
+        )))]
+    )
+
+    with patch("src.evaluator.deepseek_evaluator.OpenAI", create=True) as client:
+        client.return_value.chat.completions.create.side_effect = [invalid, corrected]
+        result = evaluate_news([item], make_config())
+
+    assert result.used_provider == "deepseek"
+    assert client.return_value.chat.completions.create.call_count == 2

@@ -108,7 +108,7 @@ python run_once.py            # 验证通过后真实发送
 2026-06-29 14:00:00 | INFO     | Fetched 28 items from 36氪
 2026-06-29 14:00:01 | INFO     | Fetched 22 items from 量子位
 ...
-2026-06-29 14:00:05 | INFO     | METRICS {"fetched": 80, "deduped": 65, "recent": 18, "evaluated": 10, "duration_ms": {...}}
+2026-06-29 14:00:05 | INFO     | RUN_SUMMARY {"fetched": 80, "deduped": 65, "recent": 18, "evaluated": 10, "duration_ms": {...}}
 2026-06-29 14:00:05 | INFO     | Feishu card sent successfully
 ```
 

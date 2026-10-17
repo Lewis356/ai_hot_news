@@ -18,10 +18,15 @@ def deduplicate(
     if not items:
         return []
 
-    # Pass 1: exact URL dedup
+    # Pass 1: stable identity, then exact URL dedup
+    seen_ids: set[str] = set()
     seen_urls: set[str] = set()
     url_deduped: list[NewsItem] = []
     for item in items:
+        if item.item_id and item.item_id in seen_ids:
+            continue
+        if item.item_id:
+            seen_ids.add(item.item_id)
         if item.url and item.url not in seen_urls:
             seen_urls.add(item.url)
             url_deduped.append(item)

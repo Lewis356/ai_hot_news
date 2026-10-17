@@ -20,6 +20,16 @@ def test_dedup_removes_exact_url_duplicates():
     assert len(result) == 1
 
 
+def test_dedup_prefers_stable_item_identity_over_changed_url_and_title():
+    first = NewsItem("Original", "http://a.com/1", "", "S1", now())
+    second = NewsItem("Renamed", "http://a.com/2", "", "S1", now())
+    first.item_id = second.item_id = "stable-id"
+
+    result = deduplicate([first, second])
+
+    assert result == [first]
+
+
 def test_dedup_removes_similar_title():
     items = [
         NewsItem(

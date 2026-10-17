@@ -5,9 +5,8 @@ Feishu's webhook signing spec: ``string_to_sign = "{timestamp}\n{secret}"``
 hashed with HMAC-SHA256 and base64-encoded. The webhook receiver verifies
 the signature before accepting the message.
 
-When the secret is empty we fall back to the legacy unauthenticated path so
-existing deployments aren't broken, but we log a one-shot WARNING so the
-operator knows their webhook is unprotected.
+Live publishing requires a signing secret; unsigned webhook delivery is
+rejected before any network request is made.
 """
 from __future__ import annotations
 
@@ -61,7 +60,7 @@ def _sign_payload(secret: str, timestamp: int) -> str:
     return base64.b64encode(digest).decode("utf-8")
 
 
-def _maybe_sign_payload(body: dict, secret: str) -> dict:
+def _signed_body(body: dict, secret: str) -> dict:
     """Return a signed copy of ``body``."""
     timestamp = int(time.time())
     signed = dict(body)
@@ -93,7 +92,7 @@ def send_card(
         logger.error(error)
         return PublishResult(PublishStatus.FAILED, error)
 
-    body = _maybe_sign_payload(card, config.feishu_webhook_secret)
+    body = _signed_body(card, config.feishu_webhook_secret)
 
     for attempt in range(max_retries):
         try:
