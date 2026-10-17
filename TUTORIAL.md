@@ -44,7 +44,7 @@ cp .env.example .env
 ```env
 DEEPSEEK_API_KEY=sk-你的真实key
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的uuid
-FEISHU_WEBHOOK_SECRET=签名校验页面复制的密钥
+FEISHU_WEBHOOK_SECRET=仅在启用签名校验时填写
 ```
 
 > ⚠️ **安全提醒**:`.env` 永远不要 commit。如果你曾把 `.env` 推过任何公开仓库,**立刻**在 DeepSeek / 飞书后台重置密钥。
@@ -134,7 +134,7 @@ rss_sources:
     url: "https://www.jiqizhixin.com/rss"
 ```
 
-### 6.2 启用飞书 HMAC 签名(正式推送必需)
+### 6.2 启用飞书 HMAC 签名(可选)
 
 1. 飞书群 → 群机器人 → 你的自定义机器人 → 安全设置 → **勾选"签名校验"** → 复制密钥
 2. `.env` 中:`FEISHU_WEBHOOK_SECRET=<复制的密钥>`
@@ -235,7 +235,7 @@ src/
 ## 10. 安全建议清单
 
 - [ ] `.env` 永远不 commit(本仓库 `.gitignore` 已包含)
-- [ ] 启用飞书 HMAC 签名(`FEISHU_WEBHOOK_SECRET`)
+- [ ] 如需额外验证，启用飞书 HMAC 签名(`FEISHU_WEBHOOK_SECRET`)
 - [ ] 定期轮换 DeepSeek / OpenAI key
 - [ ] 在 CI/服务器上以最小权限用户运行
 - [ ] 监听日志,留意异常 `[REDACTED]` 出现频次(意味着某段代码正在尝试打印密钥)

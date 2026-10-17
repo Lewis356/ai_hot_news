@@ -82,8 +82,6 @@ def validate_runtime_config(config: Config, *, publish: bool) -> None:
     if publish:
         if not config.feishu_webhook_url:
             raise ConfigError("FEISHU_WEBHOOK_URL is required for publishing")
-        if not config.feishu_webhook_secret:
-            raise ConfigError("FEISHU_WEBHOOK_SECRET is required for publishing")
 
 
 def load_config(config_dir: str = ".") -> Config:

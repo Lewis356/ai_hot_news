@@ -189,15 +189,22 @@ def test_signs_payload_when_secret_present():
     assert sent_body["timestamp"].isdigit()
 
 
-def test_missing_secret_fails_before_network_request():
+def test_sends_unsigned_payload_when_secret_is_missing():
     card = {"msg_type": "interactive", "card": {}}
     cfg = make_feishu_config(secret="")
     with patch("src.publisher.feishu.httpx.post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            raise_for_status=lambda: None,
+            json=lambda: {"code": 0, "msg": "success"},
+        )
         result = send_card(card, cfg, max_retries=1)
 
-    assert result.status is PublishStatus.FAILED
-    assert result.error == "Feishu webhook secret is not configured"
-    mock_post.assert_not_called()
+    assert result.status is PublishStatus.SENT
+    sent_body = mock_post.call_args.kwargs["json"]
+    assert sent_body == card
+    assert "timestamp" not in sent_body
+    assert "sign" not in sent_body
 
 
 def test_retries_on_5xx_then_succeeds():

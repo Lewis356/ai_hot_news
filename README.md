@@ -132,7 +132,7 @@ pytest -q
 ## ❓ FAQ
 
 **Q: 飞书 webhook 怎么开"签名校验"?**
-A: 飞书群 → 群机器人 → 添加机器人 → 选"自定义机器人" → "安全设置" 勾选"签名校验",复制 secret 粘贴到 `.env` 的 `FEISHU_WEBHOOK_SECRET`。
+A: 签名校验是可选的。未开启时只需配置 `FEISHU_WEBHOOK_URL`；如需开启，进入飞书群 → 群机器人 → 自定义机器人 → 安全设置，勾选"签名校验"，再把 secret 配置为 `FEISHU_WEBHOOK_SECRET`。
 
 **Q: Pipeline 全程失败,如何排查?**
 A: 看 `logs/daily_YYYY-MM-DD.log` 最末的 `RUN_SUMMARY {...}`；`status`、逐源状态、实际 Provider 和投递结果都会记录。失败会返回非零退出码，使 GitHub Actions 正确标红。

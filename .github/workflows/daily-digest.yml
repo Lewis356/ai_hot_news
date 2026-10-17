@@ -59,14 +59,10 @@ jobs:
         if: env.DRY_RUN != 'true'
         shell: bash
         run: |
-          missing=0
-          for name in FEISHU_WEBHOOK_URL FEISHU_WEBHOOK_SECRET; do
-            if [ -z "${!name}" ]; then
-              echo "::error title=Missing GitHub Secret::${name} is not configured"
-              missing=1
-            fi
-          done
-          exit "$missing"
+          if [ -z "${FEISHU_WEBHOOK_URL}" ]; then
+            echo "::error title=Missing GitHub Secret::FEISHU_WEBHOOK_URL is not configured"
+            exit 1
+          fi
 
       - name: Validate runtime configuration
         run: |

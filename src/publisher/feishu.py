@@ -2,11 +2,8 @@
 
 When ``config.feishu_webhook_secret`` is non-empty the body is signed per
 Feishu's webhook signing spec: ``string_to_sign = "{timestamp}\n{secret}"``
-hashed with HMAC-SHA256 and base64-encoded. The webhook receiver verifies
-the signature before accepting the message.
-
-Live publishing requires a signing secret; unsigned webhook delivery is
-rejected before any network request is made.
+hashed with HMAC-SHA256 and base64-encoded. Otherwise the webhook receives
+the original unsigned body.
 """
 from __future__ import annotations
 
@@ -87,12 +84,11 @@ def send_card(
         logger.error(error)
         return PublishResult(PublishStatus.FAILED, error)
 
-    if not config.feishu_webhook_secret:
-        error = "Feishu webhook secret is not configured"
-        logger.error(error)
-        return PublishResult(PublishStatus.FAILED, error)
-
-    body = _signed_body(card, config.feishu_webhook_secret)
+    body = (
+        _signed_body(card, config.feishu_webhook_secret)
+        if config.feishu_webhook_secret
+        else card
+    )
 
     for attempt in range(max_retries):
         try:

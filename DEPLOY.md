@@ -34,7 +34,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 > ⚠️ `.gitignore` 已经屏蔽了 `.env`、`.venv/`、`logs/`,但**请在 push 前再确认一次**:
 > `git status --ignored` 看一下有没有误带的本地密钥。
 
-## Step 2 — 配置 3 个 Repository Secret
+## Step 2 — 配置 Repository Secrets
 
 进 GitHub 仓库 → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**,逐个加:
 
@@ -42,7 +42,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 |---|---|---|---|
 | `DEEPSEEK_API_KEY` | `sk-...` | ✅ | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
 | `FEISHU_WEBHOOK_URL` | `https://open.feishu.cn/open-apis/bot/v2/hook/xxx` | ✅ | 飞书群 → 群机器人 → webhook 地址 |
-| `FEISHU_WEBHOOK_SECRET` | 飞书"签名校验"开关里给的 secret | ✅ | 飞书群机器人 → 安全设置 → 签名校验 |
+| `FEISHU_WEBHOOK_SECRET` | 飞书"签名校验"开关里给的 secret | 仅开启签名校验时 | 飞书群机器人 → 安全设置 → 签名校验 |
 
 如果 `config.yaml` 里 `ai.provider` 切到 `openai` / `ollama`,再加对应密钥,workflow 已声明:
 
@@ -90,7 +90,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 |---|---|
 | Workflow 没出现在 Actions 列表 | YAML 路径必须是 `.github/workflows/*.yml` |
 | 跑了但飞书没卡 | 看 `Validate runtime configuration` 与 `Run daily digest` 两个 step；失败会返回非零退出码 |
-| 飞书 403 / 签名失败 | `FEISHU_WEBHOOK_SECRET` 和飞书后台"签名校验"里显示的不一致 |
+| 飞书 403 / 签名失败 | 若启用了签名校验，检查 `FEISHU_WEBHOOK_SECRET` 是否和飞书后台一致 |
 | 评估超时 (10 min) | DeepSeek 偶发;在 [main.py](main.py) 留可重试,或把 `timeout-minutes` 调到 15 |
 | 出现 `ModuleNotFoundError` | 检查 `working-directory: ai_hot_news` 是否生效(子目录场景容易漏) |
 | RSS 抓取空 | 源站临时 403/限流;看 artifact 里的日志 `RUN_SUMMARY` 行 |

@@ -50,7 +50,7 @@
 
 ### 4. 发布安全与幂等语义
 
-- 按飞书官方算法修复签名，并以官方示例参数形成独立固定向量测试；`FEISHU_WEBHOOK_SECRET` 在生产必须存在。
+- 按飞书官方算法修复签名，并以官方示例参数形成独立固定向量测试；只有机器人启用签名校验时才配置 `FEISHU_WEBHOOK_SECRET`。
 - 仅对明确可重试的情况重试。POST 发生 read timeout 时，服务端可能已经收到了消息，此时结果应为 `unknown`，盲目重试可能产生重复卡片。
 - 自定义机器人 webhook 的官方请求体没有幂等键，因此仅靠 webhook 无法保证 exactly-once；这是由接口能力推导出的限制。最小做法是在卡片和日志写入稳定 `digest_id`（北京时间日期），并将“发送结果未知”暴露为失败供人工核对。若未来必须自动去重，应先引入可靠的成功投递账本或迁移到可查询消息的应用机器人，而不是把 GitHub cache 当数据库。
 - HTTP 200 之后仍要校验 JSON `code == 0`；4xx/签名错误不要重试，429/5xx 尊重 `Retry-After` 并做有上限退避。飞书还规定单机器人 100 次/分钟、5 次/秒和 20 KB 请求体上限。来源：[飞书官方文档](https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot)。

@@ -31,10 +31,16 @@ def test_runtime_config_requires_selected_provider_key():
         validate_runtime_config(config, publish=True)
 
 
-def test_runtime_config_requires_signed_webhook_for_publish():
+def test_runtime_config_allows_unsigned_webhook_for_publish():
     config = make_config(feishu_webhook_secret="")
 
-    with pytest.raises(ConfigError, match="FEISHU_WEBHOOK_SECRET"):
+    validate_runtime_config(config, publish=True)
+
+
+def test_runtime_config_requires_webhook_url_for_publish():
+    config = make_config(feishu_webhook_url="", feishu_webhook_secret="")
+
+    with pytest.raises(ConfigError, match="FEISHU_WEBHOOK_URL"):
         validate_runtime_config(config, publish=True)
 
 

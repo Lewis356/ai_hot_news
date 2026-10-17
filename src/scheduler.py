@@ -130,7 +130,7 @@ def step_publish(
     now: datetime,
     metrics: Metrics,
 ) -> PublishResult:
-    """Build and send one signed Feishu card."""
+    """Build and send one Feishu card."""
     with step_timer(metrics, "publish"):
         result = send_card(_build_digest_card(evaluated, now, metrics), config)
     metrics.publish_outcome = result.status.value
