@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
-from src.evaluator.rule_evaluator import RuleEvaluator
+
 from src.config import Config
+from src.evaluator.rule_evaluator import RuleEvaluator
 from src.models import NewsItem
 
 

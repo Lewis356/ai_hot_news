@@ -26,7 +26,7 @@ _LARK_MD_SPECIAL = re.compile(r"([\\`*_{}\[\]()#!|<>])")
 
 
 def _md_escape(text: str) -> str:
-    """Escape Lark markdown meta-characters in ``text``.
+    r"""Escape Lark markdown meta-characters in ``text``.
 
     We escape the chars that are dangerous at *any* position (not just line
     start): backslash, backtick, emphasis markers, brackets / parens
@@ -129,6 +129,7 @@ def build_card(
     """
     date_str = date.strftime("%Y-%m-%d")
     time_str = date.strftime("%H:%M")
+    timezone_name = getattr(date.tzinfo, "key", None) or date.tzname() or "local"
 
     # ---- Header -----------------------------------------------------------
     if items:
@@ -221,8 +222,8 @@ def build_card(
                     "tag": "plain_text",
                     "content": (
                         f"📊 抓取 {pipeline_counts.get('fetched', 0)} → "
-                        f"去重 {pipeline_counts.get('deduped', 0)} → "
                         f"近 24h {pipeline_counts.get('recent', 0)} → "
+                        f"去重 {pipeline_counts.get('deduped', 0)} → "
                         f"入选 {pipeline_counts.get('evaluated', 0)} 条"
                     ),
                 }
@@ -232,7 +233,10 @@ def build_card(
     elements.append({
         "tag": "note",
         "elements": [
-            {"tag": "plain_text", "content": f"⏱ 报告生成于 {time_str} UTC"}
+            {
+                "tag": "plain_text",
+                "content": f"⏱ 报告生成于 {time_str} {timezone_name}",
+            }
         ],
     })
 

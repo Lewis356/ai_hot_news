@@ -10,7 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
-from src.config import load_config
+from src.config import load_config, validate_runtime_config
 from src.logger import setup_logging
 from src.scheduler import run_daily_digest
 
@@ -22,20 +22,22 @@ def main() -> None:
     project_root = Path(__file__).parent
     config = load_config(str(project_root))
     setup_logging(config, str(project_root / "logs"))
+    validate_runtime_config(config, publish=True)
 
     schedule = config.schedule
     hour = schedule.get("cron_hour", 2)
     minute = schedule.get("cron_minute", 0)
+    timezone_name = schedule.get("timezone", "Asia/Shanghai")
 
     logger.info(
         f"AI News Daily Digest starting. "
-        f"Scheduled: {hour:02d}:{minute:02d} daily"
+        f"Scheduled: {hour:02d}:{minute:02d} daily ({timezone_name})"
     )
 
-    scheduler = BackgroundScheduler()
+    scheduler = BackgroundScheduler(timezone=timezone_name)
     scheduler.add_job(
         run_daily_digest,
-        trigger=CronTrigger(hour=hour, minute=minute),
+        trigger=CronTrigger(hour=hour, minute=minute, timezone=timezone_name),
         args=[config],
         id="daily_digest",
         name="AI News Daily Digest",

@@ -1,61 +1,115 @@
-"""Daily digest pipeline orchestrator.
-
-Split into discrete, individually-testable steps. Each step writes its
-duration into the shared :class:`Metrics` so the end-of-run ``METRICS``
-line gives an operator everything they need to debug.
-"""
+"""Daily digest pipeline orchestrator with explicit run outcomes."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 
-from src.evaluator import evaluate_news
-from src.fetcher.rss_fetcher import fetch_all_with_report
+from src.evaluator import EvaluationResult, evaluate_news
+from src.fetcher.rss_fetcher import FetchBatch, fetch_all_with_report
 from src.models import EvaluatedItem, NewsItem
 from src.observability import Metrics, emit_metrics, step_timer
 from src.processor.dedup import deduplicate
 from src.processor.filter import filter_recent
 from src.publisher.card_builder import build_card
-from src.publisher.feishu import send_card
+from src.publisher.feishu import PublishResult, PublishStatus, send_card
+from src.utils.redact import redact
 
 
-# ---------------------------------------------------------------------------
-# Pipeline steps (each testable in isolation)
-# ---------------------------------------------------------------------------
-def step_fetch(config, metrics: Metrics) -> list[NewsItem]:
-    """Fetch RSS feeds concurrently and record per-source reports."""
+class DigestStatus(str, Enum):
+    SENT = "sent"
+    EMPTY_SENT = "empty_sent"
+    DRY_RUN = "dry_run"
+    FETCH_FAILED = "fetch_failed"
+    EVALUATION_FAILED = "evaluation_failed"
+    PUBLISH_FAILED = "publish_failed"
+
+
+@dataclass(frozen=True)
+class DigestResult:
+    status: DigestStatus
+    metrics: Metrics
+    provider_requested: str = ""
+    provider_used: str = ""
+    fallback_used: bool = False
+    failure_reason: str | None = None
+
+    @property
+    def exit_code(self) -> int:
+        return 0 if self.status in {
+            DigestStatus.SENT,
+            DigestStatus.EMPTY_SENT,
+            DigestStatus.DRY_RUN,
+        } else 1
+
+
+def step_fetch(config, metrics: Metrics) -> FetchBatch:
+    """Fetch all configured sources and record each source outcome."""
     with step_timer(metrics, "fetch"):
-        items, report = fetch_all_with_report(config.rss_sources)
-    metrics.fetched = len(items)
-    metrics.source_reports = report
-    return items
+        batch = fetch_all_with_report(config.rss_sources)
+    metrics.fetched = len(batch.items)
+    metrics.source_reports = batch.reports
+    metrics.failed_sources = [source.name for source in batch.sources if not source.ok]
+    metrics.degraded = any(source.status != "ok" for source in batch.sources)
+    return batch
 
 
 def step_dedup(items: list[NewsItem], config, metrics: Metrics) -> list[NewsItem]:
-    """Remove URL / title duplicates."""
+    """Remove URL and title duplicates."""
     threshold = config.dedup.get("title_similarity_threshold", 0.80)
     with step_timer(metrics, "dedup"):
-        items = deduplicate(items, threshold)
-    metrics.deduped = len(items)
-    return items
+        result = deduplicate(items, threshold)
+    metrics.deduped = len(result)
+    return result
 
 
-def step_filter(items: list[NewsItem], metrics: Metrics) -> list[NewsItem]:
-    """Keep only the last 24h (per the platform default)."""
+def step_filter(
+    items: list[NewsItem],
+    metrics: Metrics,
+    *,
+    now: datetime | None = None,
+) -> list[NewsItem]:
+    """Keep dated items from the last 24 hours."""
+    metrics.dropped_undated = sum(item.published_at is None for item in items)
     with step_timer(metrics, "filter"):
-        items = filter_recent(items, hours=24)
-    metrics.recent = len(items)
-    return items
+        result = filter_recent(items, hours=24, now=now)
+    metrics.recent = len(result)
+    return result
 
 
-def step_evaluate(items: list[NewsItem], config, metrics: Metrics) -> list[EvaluatedItem]:
-    """Run the configured AI evaluator (with rule-based fallback)."""
-    metrics.provider = config.ai.get("provider", "deepseek")
+def step_evaluate(
+    items: list[NewsItem], config, metrics: Metrics
+) -> EvaluationResult:
+    """Evaluate candidates and record the provider that actually produced them."""
     with step_timer(metrics, "evaluate"):
-        evaluated = evaluate_news(items, config)
-    metrics.evaluated = len(evaluated)
-    return evaluated
+        result = evaluate_news(items, config)
+    metrics.evaluated = len(result.items)
+    metrics.provider_requested = result.requested_provider
+    metrics.provider_used = result.used_provider
+    metrics.fallback_used = result.fallback_used
+    metrics.degraded = metrics.degraded or result.fallback_used
+    return result
+
+
+def _build_digest_card(
+    evaluated: list[EvaluatedItem],
+    now: datetime,
+    metrics: Metrics,
+) -> dict:
+    return build_card(
+        evaluated,
+        now,
+        provider=metrics.provider_used or metrics.provider_requested,
+        pipeline_counts={
+            "fetched": metrics.fetched,
+            "deduped": metrics.deduped,
+            "recent": metrics.recent,
+            "evaluated": metrics.evaluated,
+        },
+    )
 
 
 def step_publish(
@@ -63,63 +117,107 @@ def step_publish(
     config,
     now: datetime,
     metrics: Metrics,
-) -> bool:
-    """Build the Feishu card and POST it (HMAC-signed if secret set)."""
+) -> PublishResult:
+    """Build and send one signed Feishu card."""
     with step_timer(metrics, "publish"):
-        card = build_card(
-            evaluated,
-            now,
-            provider=metrics.provider,
-            pipeline_counts={
-                "fetched": metrics.fetched,
-                "deduped": metrics.deduped,
-                "recent": metrics.recent,
-                "evaluated": metrics.evaluated,
-            },
+        result = send_card(_build_digest_card(evaluated, now, metrics), config)
+    metrics.publish_outcome = result.status.value
+    return result
+
+
+def _finish(
+    status: DigestStatus,
+    metrics: Metrics,
+    failure_reason: str | None = None,
+) -> DigestResult:
+    metrics.status = status.value
+    emit_metrics(metrics)
+    return DigestResult(
+        status=status,
+        metrics=metrics,
+        provider_requested=metrics.provider_requested,
+        provider_used=metrics.provider_used,
+        fallback_used=metrics.fallback_used,
+        failure_reason=failure_reason,
+    )
+
+
+def _deliver(
+    evaluated: list[EvaluatedItem],
+    config,
+    now: datetime,
+    metrics: Metrics,
+    *,
+    empty: bool,
+    dry_run: bool,
+) -> DigestResult:
+    if dry_run:
+        with step_timer(metrics, "publish"):
+            _build_digest_card(evaluated, now, metrics)
+        metrics.publish_outcome = "skipped"
+        return _finish(DigestStatus.DRY_RUN, metrics)
+
+    publication = step_publish(evaluated, config, now, metrics)
+    if publication.status is PublishStatus.SENT:
+        status = DigestStatus.EMPTY_SENT if empty else DigestStatus.SENT
+        return _finish(status, metrics)
+    return _finish(
+        DigestStatus.PUBLISH_FAILED,
+        metrics,
+        publication.error or f"Feishu delivery status: {publication.status.value}",
+    )
+
+
+def run_daily_digest(
+    config,
+    *,
+    dry_run: bool = False,
+    now: datetime | None = None,
+) -> DigestResult:
+    """Execute one digest run and return a process-friendly outcome."""
+    timezone_name = config.schedule.get("timezone", "Asia/Shanghai")
+    local_timezone = ZoneInfo(timezone_name)
+    run_time = now.astimezone(local_timezone) if now else datetime.now(local_timezone)
+    metrics = Metrics(provider_requested=config.ai.get("provider", "deepseek"))
+
+    batch = step_fetch(config, metrics)
+    if not batch.sources or not any(source.ok for source in batch.sources):
+        logger.error("Every RSS source failed; digest was not published")
+        return _finish(
+            DigestStatus.FETCH_FAILED,
+            metrics,
+            "Every RSS source failed",
         )
-        success = send_card(card, config)
-    return success
 
+    if not batch.items:
+        logger.info("RSS fetch succeeded but returned no items; publishing an empty card")
+        return _deliver([], config, run_time, metrics, empty=True, dry_run=dry_run)
 
-# ---------------------------------------------------------------------------
-# Public entry point
-# ---------------------------------------------------------------------------
-def run_daily_digest(config) -> None:
-    """Execute the full daily digest pipeline (used by ``main`` and ``run_once``)."""
-    logger.info("=" * 50)
-    logger.info("Starting daily AI news digest pipeline")
-    now = datetime.now(timezone.utc)
-    metrics = Metrics()
-
-    items = step_fetch(config, metrics)
+    items = step_filter(batch.items, metrics, now=run_time)
     if not items:
-        logger.error("No items fetched from any source. Aborting.")
-        emit_metrics(metrics)
-        return
-
+        logger.info("No dated news was published in the last 24 hours")
+        return _deliver([], config, run_time, metrics, empty=True, dry_run=dry_run)
     items = step_dedup(items, config, metrics)
 
-    items = step_filter(items, metrics)
-    if not items:
-        logger.info("No recent news after filtering. Skipping digest.")
-        emit_metrics(metrics)
-        return
+    try:
+        evaluation = step_evaluate(items, config, metrics)
+    except Exception as exc:  # rule provider failures still need a clean exit code
+        reason = redact(f"{type(exc).__name__}: {exc}")[:200]
+        logger.error(redact(f"News evaluation failed: {exc}"))
+        return _finish(DigestStatus.EVALUATION_FAILED, metrics, reason)
 
-    evaluated = step_evaluate(items, config, metrics)
-    if not evaluated:
-        logger.error("AI evaluation returned no results. Aborting.")
-        emit_metrics(metrics)
-        return
-
-    success = step_publish(evaluated, config, now, metrics)
-
-    emit_metrics(metrics)
-
-    if success:
-        logger.info(
-            f"Daily digest completed. {len(evaluated)} items published."
+    if not evaluation.items:
+        return _finish(
+            DigestStatus.EVALUATION_FAILED,
+            metrics,
+            evaluation.fallback_reason or "Evaluation returned no items",
         )
-    else:
-        logger.error("Daily digest completed but Feishu send failed.")
 
-    logger.info("=" * 50)
+    return _deliver(
+        evaluation.items,
+        config,
+        run_time,
+        metrics,
+        empty=False,
+        dry_run=dry_run,
+    )

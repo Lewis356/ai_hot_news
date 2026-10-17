@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta, timezone
+
+from src.models import NewsItem
 from src.processor.dedup import deduplicate
 from src.processor.filter import filter_recent
-from src.models import NewsItem
 
 
 def now():
@@ -80,15 +81,15 @@ def test_filter_removes_old_items():
     assert len(result) == 0
 
 
-def test_filter_keeps_items_without_valid_date():
-    """RSS without published date (before 2020 epoch) should be kept."""
+def test_filter_removes_items_without_valid_date():
+    """RSS entries without a real publication date are not daily-news candidates."""
     item = NewsItem(
         "No Date", "http://a.com/1", "", "S1",
-        published_at=datetime(1970, 1, 1, tzinfo=timezone.utc)
+        published_at=None
     )
     items = [item]
     result = filter_recent(items, hours=24)
-    assert len(result) == 1
+    assert result == []
 
 
 def test_filter_mixed_items():

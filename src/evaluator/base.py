@@ -13,7 +13,7 @@ from __future__ import annotations
 import random
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 from urllib.parse import urlparse
 
 from loguru import logger
@@ -146,14 +146,47 @@ class BaseEvaluator(ABC):
         }
 
     def _build_evaluated_items(
-        self, items_raw: list[dict], top_n: int
+        self,
+        items_raw: list[dict],
+        candidates: list[NewsItem],
+        top_n: int,
     ) -> list[EvaluatedItem]:
-        """Sanitize, build, sort and truncate raw LLM items into top-N."""
+        """Build results while preserving candidate provenance."""
+        candidates_by_id = {
+            candidate_id: item
+            for candidate_id, item in enumerate(candidates, 1)
+        }
         results: list[EvaluatedItem] = []
+        seen_candidate_ids: set[int] = set()
+        allowed_fields = {
+            "candidate_id",
+            "title",
+            "chinese_summary",
+            "importance",
+            "keywords",
+        }
         for it in items_raw or []:
             if not isinstance(it, dict):
                 continue
-            sanitized = self._sanitize_item(it)
+            unexpected_fields = set(it) - allowed_fields
+            if unexpected_fields:
+                fields = ", ".join(sorted(unexpected_fields))
+                raise ValueError(f"unexpected fields: {fields}")
+            candidate_id = it.get("candidate_id")
+            if not isinstance(candidate_id, int) or isinstance(candidate_id, bool):
+                raise ValueError(f"invalid candidate_id: {candidate_id}")
+            candidate = candidates_by_id.get(candidate_id)
+            if candidate is None:
+                raise ValueError(f"unknown candidate_id: {candidate_id}")
+            if candidate_id in seen_candidate_ids:
+                raise ValueError(f"duplicate candidate_id: {candidate_id}")
+            seen_candidate_ids.add(candidate_id)
+            sanitized = self._sanitize_item({
+                **it,
+                "url": candidate.url,
+                "source": candidate.source,
+                "published_at": candidate.published_at,
+            })
             results.append(EvaluatedItem(**sanitized))
         results.sort(key=lambda x: x.importance, reverse=True)
         return results[:top_n]

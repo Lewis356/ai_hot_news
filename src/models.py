@@ -1,4 +1,6 @@
 """Data models for AI news pipeline."""
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -10,7 +12,7 @@ class NewsItem:
     url: str
     summary: str
     source: str
-    published_at: datetime
+    published_at: datetime | None
     fetched_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -23,4 +25,4 @@ class EvaluatedItem:
     chinese_summary: str
     importance: int
     keywords: list[str]
-    published_at: datetime
+    published_at: datetime | None

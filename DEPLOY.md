@@ -4,7 +4,7 @@
 
 ## 概览
 
-- **触发时间**:每天 UTC 16:00(=北京时间次日 00:00)
+- **触发时间**:每天 UTC 16:07(=北京时间次日 00:07)
 - **入口**:`run_once.py`(不挂 scheduler,跑完即结束)
 - **环境**:ubuntu-latest + Python 3.11
 - **超时**:10 分钟
@@ -42,7 +42,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 |---|---|---|---|
 | `DEEPSEEK_API_KEY` | `sk-...` | ✅ | [platform.deepseek.com/api_keys](https://platform.deepseek.com/api_keys) |
 | `FEISHU_WEBHOOK_URL` | `https://open.feishu.cn/open-apis/bot/v2/hook/xxx` | ✅ | 飞书群 → 群机器人 → webhook 地址 |
-| `FEISHU_WEBHOOK_SECRET` | 飞书"签名校验"开关里给的 secret | ⛔ 强烈推荐 | 飞书群机器人 → 安全设置 → 签名校验 |
+| `FEISHU_WEBHOOK_SECRET` | 飞书"签名校验"开关里给的 secret | ✅ | 飞书群机器人 → 安全设置 → 签名校验 |
 
 如果 `config.yaml` 里 `ai.provider` 切到 `openai` / `ollama`,再加对应密钥,workflow 已声明:
 
@@ -55,11 +55,11 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 
 1. 仓库页面 → **Actions** 标签
 2. 左侧选 **Daily AI News Digest**
-3. 右侧 **Run workflow** → 选 `main` → 绿色 **Run workflow** 按钮
+3. 先勾选 `dry_run` 验证抓取与评估；成功后取消勾选再运行一次，验证真实推送
 
 跑完看:
 
-- ✅ **绿勾** + 飞书群同时收到卡片 → 配置全通,等 cron 即可
+- ✅ 正式运行绿勾 + 飞书群收到卡片 → 配置全通,等 cron 即可
 - ❌ **红叉** → 点进 run → 失败 step 有红字,最常见两种:
   - `DEEPSEEK_API_KEY is not set` → secret 没配或名字拼错
   - `FEISHU 4xx/5xx` → webhook URL 失效,或飞书群机器人被删除
@@ -69,14 +69,14 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 工作流文件 [`.github/workflows/daily-digest.yml`](.github/workflows/daily-digest.yml#L8-L10) 的 cron:
 
 ```yaml
-- cron: "0 16 * * *"   # 北京时间 00:00
+- cron: "7 16 * * *"   # 北京时间 00:07
 ```
 
 时区换算:`UTC = 北京时间 - 8h`,所以北京时间 `H:M` → UTC cron 用 `H-8:M`(注意跨日):
 
 | 北京时间 | UTC cron 表达式 |
 |---|---|
-| 每天 00:00 | `0 16 * * *` |
+| 每天 00:07 | `7 16 * * *` |
 | 每天 08:00 | `0 0 * * *` |
 | 每天 12:00 | `0 4 * * *` |
 | 每天 22:00 | `30 14 * * *` |
@@ -89,7 +89,7 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 | 现象 | 排查 |
 |---|---|
 | Workflow 没出现在 Actions 列表 | YAML 路径必须是 `.github/workflows/*.yml` |
-| 跑了但飞书没卡 | workflow 跑成功 ≠ 飞书收成功,看 step 里的 `Verify required secrets` 是否报 `FEISHU_WEBHOOK_URL is not set` |
+| 跑了但飞书没卡 | 看 `Validate runtime configuration` 与 `Run daily digest` 两个 step；失败会返回非零退出码 |
 | 飞书 403 / 签名失败 | `FEISHU_WEBHOOK_SECRET` 和飞书后台"签名校验"里显示的不一致 |
 | 评估超时 (10 min) | DeepSeek 偶发;在 [main.py](main.py) 留可重试,或把 `timeout-minutes` 调到 15 |
 | 出现 `ModuleNotFoundError` | 检查 `working-directory: ai_hot_news` 是否生效(子目录场景容易漏) |
@@ -109,4 +109,4 @@ gh repo create ai_hot_news --private --source=. --remote=origin --push
 python main.py
 ```
 
-`main.py` 内部用 `apscheduler` 跑 `CronTrigger(hour=0, minute=0)`,等价于 GitHub Actions 的 cron,但**依赖你电脑当时是否开机**。
+`main.py` 内部用 `apscheduler` 按 `Asia/Shanghai` 跑 `CronTrigger(hour=0, minute=7)`,等价于 GitHub Actions 的 cron,但**依赖你电脑当时是否开机**。

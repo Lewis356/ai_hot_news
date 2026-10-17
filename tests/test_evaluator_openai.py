@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-from src.evaluator.openai_evaluator import OpenAiEvaluator
+
 from src.config import Config
+from src.evaluator.openai_evaluator import OpenAiEvaluator
 from src.models import NewsItem
 
 
@@ -32,9 +33,9 @@ def test_parses_json_response():
     mock_choice = SimpleNamespace()
     mock_choice.message = SimpleNamespace()
     mock_choice.message.content = (
-        '{"items": [{"title": "测试新闻", "url": "http://a.com/1", '
-        '"source": "SourceA", "chinese_summary": "这是一条测试新闻。", '
-        '"importance": 8, "keywords": ["AI", "测试"], "published_at": "2026-06-23"}]}'
+        '{"items": [{"candidate_id": 1, "title": "测试新闻", '
+        '"chinese_summary": "这是一条测试新闻。", '
+        '"importance": 8, "keywords": ["AI", "测试"]}]}'
     )
     mock_resp = SimpleNamespace(choices=[mock_choice])
 
@@ -66,3 +67,19 @@ def test_uses_response_format_json_object():
         evaluator.evaluate(items, make_config())
         call_kwargs = mc.return_value.chat.completions.create.call_args[1]
         assert call_kwargs["response_format"] == {"type": "json_object"}
+
+
+def test_configures_request_timeout():
+    items = [NewsItem("Test", "http://a.com/1", "", "S", now())]
+    mock_choice = SimpleNamespace(
+        message=SimpleNamespace(content='{"items": []}')
+    )
+
+    with patch("src.evaluator.openai_evaluator.OpenAI", create=True) as mc:
+        mc.return_value.chat.completions.create.return_value = SimpleNamespace(
+            choices=[mock_choice]
+        )
+        evaluator.evaluate(items, make_config())
+
+    assert mc.call_args.kwargs["timeout"] == 60.0
+    assert mc.call_args.kwargs["max_retries"] == 0

@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
-from src.models import NewsItem, EvaluatedItem
+
+from src.models import EvaluatedItem, NewsItem
 
 
 def test_news_item_creation():

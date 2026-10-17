@@ -4,10 +4,10 @@ from __future__ import annotations
 import httpx
 from loguru import logger
 
-from src.models import EvaluatedItem, NewsItem
-from src.evaluator.base import BaseEvaluator
 from src.evaluator._prompting import SYSTEM_PROMPT, build_user_prompt
+from src.evaluator.base import BaseEvaluator
 from src.evaluator.json_parser import extract_json_from_text
+from src.models import EvaluatedItem, NewsItem
 
 
 class OllamaEvaluator(BaseEvaluator):
@@ -21,7 +21,9 @@ class OllamaEvaluator(BaseEvaluator):
         top_n = ai_cfg.get("top_n", 10)
         max_candidates = ai_cfg.get("max_candidates", 60)
         max_retries = ai_cfg.get("max_retries", 3)
-        timeout = float(ai_cfg.get("ollama_timeout", 120.0))
+        timeout = float(
+            ai_cfg.get("ollama_timeout", ai_cfg.get("request_timeout", 60.0))
+        )
         model = ai_cfg.get("ollama_model", "qwen2.5:7b")
         base_url = (config.ollama_base_url or "http://localhost:11434").rstrip("/")
         candidates = items[:max_candidates]
@@ -51,6 +53,8 @@ class OllamaEvaluator(BaseEvaluator):
         if raw is None:
             return []
         data = extract_json_from_text(raw)
-        results = self._build_evaluated_items(data.get("items", []), top_n)
+        results = self._build_evaluated_items(
+            data.get("items", []), candidates, top_n
+        )
         logger.info(f"Ollama evaluated: {len(results)} items (Top {top_n})")
         return results

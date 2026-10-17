@@ -6,7 +6,7 @@ failure (unless the operator already chose ``rule``).
 """
 from __future__ import annotations
 
-from typing import Type
+from dataclasses import dataclass
 
 from loguru import logger
 
@@ -18,12 +18,23 @@ from src.evaluator.rule_evaluator import RuleEvaluator
 from src.models import EvaluatedItem, NewsItem
 from src.utils.redact import redact
 
-PROVIDER_REGISTRY: dict[str, Type[BaseEvaluator]] = {
+PROVIDER_REGISTRY: dict[str, type[BaseEvaluator]] = {
     "deepseek": DeepSeekEvaluator,
     "openai": OpenAiEvaluator,
     "ollama": OllamaEvaluator,
     "rule": RuleEvaluator,
 }
+
+
+@dataclass
+class EvaluationResult:
+    """Outcome of evaluating one batch of candidate news."""
+
+    items: list[EvaluatedItem]
+    requested_provider: str
+    used_provider: str
+    fallback_used: bool
+    fallback_reason: str | None
 
 
 def _create_evaluator(config) -> BaseEvaluator:
@@ -39,29 +50,50 @@ def _create_evaluator(config) -> BaseEvaluator:
 
 def _safe_evaluate(
     evaluator: BaseEvaluator, items: list[NewsItem], config, provider: str
-) -> list[EvaluatedItem]:
+) -> EvaluationResult:
     """Run ``evaluator.evaluate()`` and fall back to rule-based on error.
 
     When the primary provider is already ``rule`` we re-raise so a broken
     heuristic isn't silently swallowed.
     """
     try:
-        return evaluator.evaluate(items, config)
+        evaluated = evaluator.evaluate(items, config)
     except Exception as e:  # noqa: BLE001 — providers raise heterogeneous types
         if provider == "rule":
             raise
+        reason = redact(f"{type(e).__name__}: {e}")[:200]
         logger.error(
             redact(
                 f"Provider '{provider}' failed: {e}. "
                 f"Falling back to rule-based evaluator."
             )
         )
-        return RuleEvaluator().evaluate(items, config)
+        return EvaluationResult(
+            RuleEvaluator().evaluate(items, config),
+            provider,
+            "rule",
+            True,
+            reason,
+        )
+    if not evaluated and provider != "rule":
+        reason = "primary provider returned no items"
+        logger.error(
+            f"Provider '{provider}' returned no items. "
+            "Falling back to rule-based evaluator."
+        )
+        return EvaluationResult(
+            RuleEvaluator().evaluate(items, config),
+            provider,
+            "rule",
+            True,
+            reason,
+        )
+    return EvaluationResult(evaluated, provider, provider, False, None)
 
 
 def evaluate_news(
     items: list[NewsItem], config
-) -> list[EvaluatedItem]:
+) -> EvaluationResult:
     """Evaluate and rank news items using the configured AI provider.
 
     Falls back to rule-based evaluation if the primary provider raises.
@@ -69,7 +101,8 @@ def evaluate_news(
     """
     if not items:
         logger.info("No candidate news items to evaluate")
-        return []
+        provider = config.ai.get("provider", "deepseek")
+        return EvaluationResult([], provider, provider, False, None)
 
     provider = config.ai.get("provider", "deepseek")
     evaluator = _create_evaluator(config)
@@ -82,5 +115,6 @@ __all__ = [
     "OpenAiEvaluator",
     "OllamaEvaluator",
     "RuleEvaluator",
+    "EvaluationResult",
     "evaluate_news",
 ]

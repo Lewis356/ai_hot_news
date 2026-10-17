@@ -15,41 +15,54 @@ import base64
 import hashlib
 import hmac
 import time
-from typing import Any
+from dataclasses import dataclass
+from enum import Enum
 
 import httpx
 from loguru import logger
 
 from src.utils.redact import redact
 
-_SIGNATURE_WARNED = False
+_MAX_RETRY_WAIT_SECONDS = 30.0
+
+class PublishStatus(str, Enum):
+    """Observable outcome of a Feishu publish attempt."""
+
+    SENT = "sent"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    status: PublishStatus
+    error: str | None = None
+
+
+def _retry_wait(attempt: int, response: httpx.Response | None = None) -> float:
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after is not None:
+            try:
+                return min(max(float(retry_after), 0.0), _MAX_RETRY_WAIT_SECONDS)
+            except ValueError:
+                pass
+    return min(float(2**attempt), _MAX_RETRY_WAIT_SECONDS)
 
 
 def _sign_payload(secret: str, timestamp: int) -> str:
     """Compute Feishu webhook signature for ``timestamp`` using ``secret``."""
-    string_to_sign = f"{timestamp}\n{secret}"
+    signing_key = f"{timestamp}\n{secret}".encode()
     digest = hmac.new(
-        secret.encode("utf-8"),
-        string_to_sign.encode("utf-8"),
+        signing_key,
+        b"",
         hashlib.sha256,
     ).digest()
     return base64.b64encode(digest).decode("utf-8")
 
 
 def _maybe_sign_payload(body: dict, secret: str) -> dict:
-    """Return a copy of ``body`` with ``timestamp`` + ``sign`` injected, or
-    return ``body`` unchanged and log a one-time warning when no secret is set.
-    """
-    global _SIGNATURE_WARNED
-    if not secret:
-        if not _SIGNATURE_WARNED:
-            logger.warning(
-                "FEISHU_WEBHOOK_SECRET is empty — sending unsigned. "
-                "Set it in .env and enable '签名校验' in Feishu bot settings."
-            )
-            _SIGNATURE_WARNED = True
-        return body
-
+    """Return a signed copy of ``body``."""
     timestamp = int(time.time())
     signed = dict(body)
     signed["timestamp"] = str(timestamp)
@@ -62,8 +75,8 @@ def send_card(
     config,
     max_retries: int = 3,
     timeout: float = 10.0,
-) -> bool:
-    """Send a card message to Feishu via webhook. Returns True on success.
+) -> PublishResult:
+    """Send a card message to Feishu and return an explicit delivery outcome.
 
     Only transient transport failures (network errors, 5xx) are retried; a
     ``code != 0`` application-level response fails immediately so we don't
@@ -71,8 +84,14 @@ def send_card(
     """
     url = config.feishu_webhook_url
     if not url:
-        logger.error("Feishu webhook URL is not configured")
-        return False
+        error = "Feishu webhook URL is not configured"
+        logger.error(error)
+        return PublishResult(PublishStatus.FAILED, error)
+
+    if not config.feishu_webhook_secret:
+        error = "Feishu webhook secret is not configured"
+        logger.error(error)
+        return PublishResult(PublishStatus.FAILED, error)
 
     body = _maybe_sign_payload(card, config.feishu_webhook_secret)
 
@@ -84,28 +103,72 @@ def send_card(
                 timeout=timeout,
                 headers={"Content-Type": "application/json"},
             )
+            if 400 <= response.status_code < 500 and response.status_code != 429:
+                error = f"Feishu webhook returned HTTP {response.status_code}"
+                logger.error(error)
+                return PublishResult(PublishStatus.FAILED, error)
             response.raise_for_status()
-            body_resp = response.json()
+            try:
+                body_resp = response.json()
+            except ValueError:
+                error = "Feishu returned an invalid JSON response"
+                logger.error(error)
+                return PublishResult(PublishStatus.FAILED, error)
             if body_resp.get("code") == 0:
                 logger.info("Feishu card sent successfully")
-                return True
+                return PublishResult(PublishStatus.SENT)
             # Application-level rejection: do NOT retry — same payload will
             # keep failing.
-            logger.error(
+            error = (
                 f"Feishu API rejected payload: code={body_resp.get('code')} "
                 f"msg={body_resp.get('msg')}"
             )
-            return False
-        except Exception as e:
-            wait = 2 ** attempt
-            logger.warning(
-                redact(
-                    f"Feishu send attempt {attempt + 1} failed: {e}. "
-                    f"Retrying in {wait}s..."
-                )
-            )
+            logger.error(error)
+            return PublishResult(PublishStatus.FAILED, error)
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code != 429 and status_code < 500:
+                error = f"Feishu webhook returned HTTP {status_code}"
+                logger.error(error)
+                return PublishResult(PublishStatus.FAILED, error)
             if attempt < max_retries - 1:
+                wait = _retry_wait(attempt, exc.response)
+                logger.warning(
+                    f"Feishu webhook returned HTTP {status_code}; retrying in {wait}s"
+                )
                 time.sleep(wait)
+                continue
+            error = (
+                f"Feishu webhook returned HTTP {status_code} after "
+                f"{max_retries} attempts"
+            )
+            logger.error(error)
+            return PublishResult(PublishStatus.FAILED, error)
+        except httpx.ReadTimeout:
+            error = "Feishu response timed out; delivery status is unknown"
+            logger.error(error)
+            return PublishResult(PublishStatus.UNKNOWN, error)
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+            if attempt < max_retries - 1:
+                wait = _retry_wait(attempt)
+                logger.warning(
+                    redact(
+                        f"Feishu connection attempt {attempt + 1} failed: {exc}. "
+                        f"Retrying in {wait}s..."
+                    )
+                )
+                time.sleep(wait)
+                continue
+            error = redact(
+                f"Feishu connection failed after {max_retries} attempts: {exc}"
+            )
+            logger.error(error)
+            return PublishResult(PublishStatus.FAILED, error)
+        except Exception as exc:
+            error = redact(f"Feishu publish failed: {exc}")
+            logger.error(error)
+            return PublishResult(PublishStatus.FAILED, error)
 
-    logger.error(f"Failed to send Feishu card after {max_retries} attempts")
-    return False
+    error = "Feishu publish requires at least one attempt"
+    logger.error(error)
+    return PublishResult(PublishStatus.FAILED, error)

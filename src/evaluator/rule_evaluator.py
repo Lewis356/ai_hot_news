@@ -1,9 +1,8 @@
 """Rule-based news evaluator using heuristics. No API key required."""
 import re
 
-from src.models import NewsItem, EvaluatedItem
 from src.evaluator.base import BaseEvaluator
-
+from src.models import EvaluatedItem
 
 HIGH_WEIGHT_KEYWORDS = {
     "大模型": 3, "GPT": 3, "GPT-4": 3, "GPT-5": 4, "开源": 3,
@@ -21,7 +20,8 @@ MEDIUM_WEIGHT_KEYWORDS = {
 }
 
 SOURCE_WEIGHTS = {
-    "机器之心": 3, "量子位": 3, "TechCrunch": 2, "TechCrunch AI": 2,
+    "量子位": 3, "InfoQ 中文": 2, "雷峰网": 2,
+    "TechCrunch": 2, "TechCrunch AI": 2,
 }
 DEFAULT_SOURCE_WEIGHT = 1
 

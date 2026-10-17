@@ -27,9 +27,9 @@ pip install -r requirements.txt
 ### 2.2 飞书机器人 Webhook
 
 1. 打开目标飞书群 → 设置 → 群机器人 → 添加机器人 → **自定义机器人**
-2. 名称随意;签名校验**建议开启**(见 §3.5)
+2. 名称建议设为“每日ai新闻”;签名校验必须开启(见 §6.2)
 3. 复制 Webhook URL(形如 `https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxxxx`)
-4. 如果开了签名校验,再复制 "签名校验密钥"
+4. 复制“签名校验密钥”，稍后写入环境变量
 
 ## 3. 配置项目
 
@@ -44,7 +44,7 @@ cp .env.example .env
 ```env
 DEEPSEEK_API_KEY=sk-你的真实key
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的uuid
-FEISHU_WEBHOOK_SECRET=如果开了签名校验就填,否则留空
+FEISHU_WEBHOOK_SECRET=签名校验页面复制的密钥
 ```
 
 > ⚠️ **安全提醒**:`.env` 永远不要 commit。如果你曾把 `.env` 推过任何公开仓库,**立刻**在 DeepSeek / 飞书后台重置密钥。
@@ -53,16 +53,23 @@ FEISHU_WEBHOOK_SECRET=如果开了签名校验就填,否则留空
 
 ```yaml
 rss_sources:
-  - name: "36氪"
-    url: "https://36kr.com/feed"
+  - name: "InfoQ 中文"
+    url: "https://www.infoq.cn/feed"
   - name: "量子位"
     url: "https://www.qbitai.com/feed"
+  - name: "雷峰网"
+    url: "https://www.leiphone.com/feed"
   - name: "TechCrunch AI"
     url: "https://techcrunch.com/category/artificial-intelligence/feed/"
+  - name: "OpenAI News"
+    url: "https://openai.com/news/rss.xml"
+  - name: "Hugging Face Blog"
+    url: "https://huggingface.co/blog/feed.xml"
 
 schedule:
-  cron_hour: 0          # 每天 00:00 触发(24h)
-  cron_minute: 0
+  cron_hour: 0          # 北京时间每天 00:07 触发
+  cron_minute: 7
+  timezone: "Asia/Shanghai"
 
 ai:
   provider: "deepseek"  # 可选:deepseek | openai | ollama | rule
@@ -90,7 +97,8 @@ pip install -r requirements-dev.txt
 ## 4. 干跑一次(必试)
 
 ```bash
-python run_once.py
+python run_once.py --dry-run  # 先验证，不发送
+python run_once.py            # 验证通过后真实发送
 ```
 
 正常情况下你应该看到:
@@ -126,7 +134,7 @@ rss_sources:
     url: "https://www.jiqizhixin.com/rss"
 ```
 
-### 6.2 启用飞书 HMAC 签名(强烈推荐)
+### 6.2 启用飞书 HMAC 签名(正式推送必需)
 
 1. 飞书群 → 群机器人 → 你的自定义机器人 → 安全设置 → **勾选"签名校验"** → 复制密钥
 2. `.env` 中:`FEISHU_WEBHOOK_SECRET=<复制的密钥>`

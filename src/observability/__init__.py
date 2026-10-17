@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from typing import Iterator
 
 from loguru import logger
 
@@ -28,9 +28,16 @@ class Metrics:
     deduped: int = 0
     recent: int = 0
     evaluated: int = 0
+    dropped_undated: int = 0
     duration_ms: dict[str, int] = field(default_factory=dict)
     source_reports: dict[str, dict] = field(default_factory=dict)
-    provider: str = ""
+    failed_sources: list[str] = field(default_factory=list)
+    provider_requested: str = ""
+    provider_used: str = ""
+    fallback_used: bool = False
+    publish_outcome: str = "not_attempted"
+    status: str = "running"
+    degraded: bool = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)

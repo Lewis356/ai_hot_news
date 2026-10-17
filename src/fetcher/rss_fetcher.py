@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Literal
 
 import feedparser
 import httpx
@@ -19,9 +22,57 @@ HEADERS = {
     "Accept": "application/rss+xml, application/xml, text/xml, */*",
 }
 
+FetchStatus = Literal["ok", "http_error", "parse_warning", "parse_error"]
+
+
+@dataclass
+class SourceFetchResult:
+    """Outcome for one configured feed."""
+
+    name: str
+    status: FetchStatus
+    items: list[NewsItem] = field(default_factory=list)
+    error: str | None = None
+    duration_ms: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {"ok", "parse_warning"}
+
+    @property
+    def count(self) -> int:
+        return len(self.items)
+
+    def as_report(self) -> dict:
+        return {
+            "ok": self.ok,
+            "status": self.status,
+            "count": self.count,
+            "error": self.error,
+            "duration_ms": self.duration_ms,
+        }
+
+
+@dataclass
+class FetchBatch:
+    """Items plus inspectable outcomes for every configured feed."""
+
+    items: list[NewsItem] = field(default_factory=list)
+    sources: list[SourceFetchResult] = field(default_factory=list)
+
+    @property
+    def reports(self) -> dict[str, dict]:
+        return {source.name: source.as_report() for source in self.sources}
+
 
 def fetch_single(name: str, url: str, timeout: int = 15) -> list[NewsItem]:
     """Fetch and parse a single RSS feed. Returns empty list on failure."""
+    return _fetch_source(name, url, timeout).items
+
+
+def _fetch_source(name: str, url: str, timeout: int) -> SourceFetchResult:
+    """Fetch one source while retaining its outcome for the batch report."""
+    start = time.perf_counter()
     try:
         r = httpx.get(
             url,
@@ -34,15 +85,34 @@ def fetch_single(name: str, url: str, timeout: int = 15) -> list[NewsItem]:
         logger.warning(
             redact(f"RSS HTTP fetch failed for {name} ({url}): {e}")
         )
-        return []
+        return SourceFetchResult(
+            name=name,
+            status="http_error",
+            error=redact(str(e)),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
 
-    feed = feedparser.parse(r.text)
+    try:
+        feed = feedparser.parse(r.text)
+    except Exception as e:
+        logger.warning(redact(f"RSS parse error for {name}: {e}"))
+        return SourceFetchResult(
+            name=name,
+            status="parse_error",
+            error=redact(str(e)),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
 
     if feed.bozo and not feed.entries:
         logger.warning(
             redact(f"RSS parse error for {name}: {feed.bozo_exception}")
         )
-        return []
+        return SourceFetchResult(
+            name=name,
+            status="parse_error",
+            error=redact(str(feed.bozo_exception)),
+            duration_ms=int((time.perf_counter() - start) * 1000),
+        )
 
     if feed.bozo:
         logger.debug(
@@ -62,74 +132,89 @@ def fetch_single(name: str, url: str, timeout: int = 15) -> list[NewsItem]:
         ))
 
     logger.info(f"Fetched {len(items)} items from {name}")
-    return items
+    return SourceFetchResult(
+        name=name,
+        status="parse_warning" if feed.bozo else "ok",
+        items=items,
+        error=redact(str(feed.bozo_exception)) if feed.bozo else None,
+        duration_ms=int((time.perf_counter() - start) * 1000),
+    )
 
 
-def _entry_published_at(entry) -> "datetime":
-    from datetime import datetime, timezone
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
+def _entry_published_at(entry) -> datetime | None:
+    for field_name in ("published_parsed", "updated_parsed"):
+        parsed = getattr(entry, field_name, None)
+        if not parsed:
+            continue
         try:
             return datetime(
-                *entry.published_parsed[:6], tzinfo=timezone.utc
+                parsed[0],
+                parsed[1],
+                parsed[2],
+                parsed[3],
+                parsed[4],
+                parsed[5],
+                tzinfo=timezone.utc,
             )
         except (ValueError, TypeError):
-            pass
-    return datetime.now(timezone.utc)
+            continue
+    return None
 
 
 def fetch_all(
     sources: list[dict], timeout: int = 15
 ) -> list[NewsItem]:
     """Fetch RSS feeds from all sources concurrently (legacy: no report)."""
-    items, _ = fetch_all_with_report(sources, timeout=timeout)
-    return items
+    return fetch_all_with_report(sources, timeout=timeout).items
 
 
 def fetch_all_with_report(
     sources: list[dict], timeout: int = 15
-) -> tuple[list[NewsItem], dict[str, dict]]:
-    """Fetch RSS feeds and return ``(items, per_source_report)``.
+) -> FetchBatch:
+    """Fetch RSS feeds and retain the result for each configured source."""
+    if not sources:
+        return FetchBatch()
 
-    The report is ``{name: {"ok": bool, "count": int, "error": str|None,
-    "duration_ms": int}}``. Use ``Metrics.source_reports`` to surface this
-    in the daily ``METRICS`` log line.
-    """
-    all_items: list[NewsItem] = []
-    reports: dict[str, dict] = {}
-
-    def _run(name: str, url: str) -> tuple[str, list[NewsItem], dict]:
-        start = time.perf_counter()
-        try:
-            items = fetch_single(name, url, timeout=timeout)
-            elapsed = int((time.perf_counter() - start) * 1000)
-            return name, items, {
-                "ok": True,
-                "count": len(items),
-                "error": None,
-                "duration_ms": elapsed,
-            }
-        except Exception as e:
-            elapsed = int((time.perf_counter() - start) * 1000)
-            return name, [], {
-                "ok": False,
-                "count": 0,
-                "error": redact(str(e)),
-                "duration_ms": elapsed,
-            }
+    indexed_results: list[SourceFetchResult | None] = [None] * len(sources)
 
     with ThreadPoolExecutor(max_workers=min(len(sources), 8)) as executor:
-        futures = [
-            executor.submit(_run, s["name"], s["url"]) for s in sources
-        ]
+        futures = {
+            executor.submit(_fetch_source, source["name"], source["url"], timeout): index
+            for index, source in enumerate(sources)
+        }
         for future in as_completed(futures):
+            index = futures[future]
             try:
-                name, items, report = future.result()
-                reports[name] = report
-                all_items.extend(items)
+                indexed_results[index] = future.result()
             except Exception as e:
                 logger.warning(redact(f"Unexpected error in fetch future: {e}"))
+                indexed_results[index] = SourceFetchResult(
+                    name=sources[index]["name"],
+                    status="parse_error",
+                    error=redact(str(e)),
+                )
+
+    source_results = [result for result in indexed_results if result is not None]
+    for result in source_results:
+        result.items.sort(key=_published_sort_key, reverse=True)
+
+    all_items = [
+        source.items[position]
+        for position in range(max((len(source.items) for source in source_results), default=0))
+        for source in source_results
+        if position < len(source.items)
+    ]
 
     logger.info(
         f"Total fetched: {len(all_items)} items from {len(sources)} sources"
     )
-    return all_items, reports
+    return FetchBatch(items=all_items, sources=source_results)
+
+
+def _published_sort_key(item: NewsItem) -> float:
+    published_at = item.published_at
+    if published_at is None:
+        return float("-inf")
+    if published_at.tzinfo is None:
+        published_at = published_at.replace(tzinfo=timezone.utc)
+    return published_at.timestamp()

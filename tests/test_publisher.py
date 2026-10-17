@@ -1,17 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
-from src.publisher.card_builder import _md_escape, build_card
-from src.publisher.feishu import _sign_payload, send_card
 from src.config import Config
 from src.models import EvaluatedItem
+from src.publisher.card_builder import _md_escape, build_card
+from src.publisher.feishu import PublishStatus, _sign_payload, send_card
 from src.utils.redact import redact
 
 
-def make_feishu_config(secret: str = "") -> Config:
+def make_feishu_config(secret: str = "demo-secret") -> Config:
     return Config(
         deepseek_api_key="sk-test",
         feishu_webhook_url="https://open.feishu.cn/open-apis/bot/v2/hook/test",
@@ -135,6 +134,14 @@ def test_build_card_includes_provider_and_pipeline_counts():
     assert "入选 10" in card_str
 
 
+def test_build_card_footer_uses_the_datetime_timezone():
+    shanghai = timezone(timedelta(hours=8), name="Asia/Shanghai")
+
+    card = build_card([], datetime(2026, 10, 17, 0, 7, tzinfo=shanghai))
+
+    assert "00:07 Asia/Shanghai" in str(card)
+
+
 # ---------------------------------------------------------------------------
 # Markdown escape
 # ---------------------------------------------------------------------------
@@ -160,13 +167,9 @@ def test_escape_passes_plain_text():
 # Feishu HMAC + retry (Phase 1)
 # ---------------------------------------------------------------------------
 def test_sign_payload_matches_feishu_spec():
-    secret = "test_secret"
-    ts = 1700000000
-    expected = "vpAnmEKI4kW6s9JFBgY7HgkVTb1nvFxC6yvC7d0Zk9k="  # known vector
-    # We compute with our own hmac and compare manually:
-    import base64, hashlib, hmac
-    raw = hmac.new(secret.encode(), f"{ts}\n{secret}".encode(), hashlib.sha256).digest()
-    assert _sign_payload(secret, ts) == base64.b64encode(raw).decode()
+    assert _sign_payload("demo", 1599360473) == (
+        "l1N0gAcBjdwBvGm1xMjOF0XSyaLRpR7tuO5dHfhAYc8="
+    )
 
 
 def test_signs_payload_when_secret_present():
@@ -179,49 +182,103 @@ def test_signs_payload_when_secret_present():
             json=lambda: {"code": 0, "msg": "success"},
         )
         result = send_card(card, cfg, max_retries=1)
-    assert result is True
+    assert result.status is PublishStatus.SENT
     sent_body = mock_post.call_args.kwargs["json"]
     assert "timestamp" in sent_body
     assert "sign" in sent_body
     assert sent_body["timestamp"].isdigit()
 
 
-def test_does_not_sign_when_secret_empty():
+def test_missing_secret_fails_before_network_request():
     card = {"msg_type": "interactive", "card": {}}
     cfg = make_feishu_config(secret="")
     with patch("src.publisher.feishu.httpx.post") as mock_post:
-        mock_post.return_value = MagicMock(
-            status_code=200,
-            raise_for_status=lambda: None,
-            json=lambda: {"code": 0, "msg": "success"},
-        )
-        send_card(card, cfg, max_retries=1)
-    sent_body = mock_post.call_args.kwargs["json"]
-    assert "sign" not in sent_body
-    assert "timestamp" not in sent_body
+        result = send_card(card, cfg, max_retries=1)
+
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu webhook secret is not configured"
+    mock_post.assert_not_called()
 
 
 def test_retries_on_5xx_then_succeeds():
-    """Real retry behavior — first call raises, second call succeeds."""
     card = {"msg_type": "interactive", "card": {}}
     cfg = make_feishu_config()
+    request = httpx.Request("POST", "https://example.test/webhook")
+    failed = httpx.Response(503, request=request)
+    accepted = httpx.Response(
+        200,
+        json={"code": 0, "msg": "success"},
+        request=request,
+    )
 
-    ok_response = MagicMock(
-        status_code=200,
-        raise_for_status=lambda: None,
-        json=lambda: {"code": 0, "msg": "success"},
-    )
-    bad_response = MagicMock(
-        status_code=500,
-        raise_for_status=MagicMock(side_effect=httpx.HTTPStatusError(
-            "Server error", request=MagicMock(), response=MagicMock(),
-        )),
-    )
-    with patch("src.publisher.feishu.httpx.post", side_effect=[bad_response, ok_response]) as mock_post:
-        with patch("src.publisher.feishu.time.sleep"):
-            result = send_card(card, cfg, max_retries=2)
-    assert result is True
+    with patch(
+        "src.publisher.feishu.httpx.post", side_effect=[failed, accepted]
+    ) as mock_post, patch("src.publisher.feishu.time.sleep") as mock_sleep:
+        result = send_card(card, cfg, max_retries=2)
+
+    assert result.status is PublishStatus.SENT
     assert mock_post.call_count == 2
+    mock_sleep.assert_called_once_with(1.0)
+
+
+def test_rate_limit_honors_retry_after_with_capped_wait():
+    card = {"msg_type": "interactive", "card": {}}
+    request = httpx.Request("POST", "https://example.test/webhook")
+    limited = httpx.Response(
+        429,
+        headers={"Retry-After": "120"},
+        request=request,
+    )
+    accepted = httpx.Response(
+        200,
+        json={"code": 0, "msg": "success"},
+        request=request,
+    )
+
+    with patch(
+        "src.publisher.feishu.httpx.post", side_effect=[limited, accepted]
+    ) as mock_post, patch("src.publisher.feishu.time.sleep") as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=2)
+
+    assert result.status is PublishStatus.SENT
+    assert mock_post.call_count == 2
+    mock_sleep.assert_called_once_with(30.0)
+
+
+def test_connection_failure_retries_then_succeeds():
+    card = {"msg_type": "interactive", "card": {}}
+    request = httpx.Request("POST", "https://example.test/webhook")
+    accepted = httpx.Response(
+        200,
+        json={"code": 0, "msg": "success"},
+        request=request,
+    )
+
+    with patch(
+        "src.publisher.feishu.httpx.post",
+        side_effect=[httpx.ConnectError("connection refused", request=request), accepted],
+    ) as mock_post, patch("src.publisher.feishu.time.sleep") as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=2)
+
+    assert result.status is PublishStatus.SENT
+    assert mock_post.call_count == 2
+    mock_sleep.assert_called_once_with(1.0)
+
+
+def test_connection_failure_exhaustion_is_explicit():
+    card = {"msg_type": "interactive", "card": {}}
+    request = httpx.Request("POST", "https://example.test/webhook")
+
+    with patch(
+        "src.publisher.feishu.httpx.post",
+        side_effect=httpx.ConnectError("connection refused", request=request),
+    ) as mock_post, patch("src.publisher.feishu.time.sleep") as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=2)
+
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu connection failed after 2 attempts: connection refused"
+    assert mock_post.call_count == 2
+    mock_sleep.assert_called_once_with(1.0)
 
 
 def test_send_card_success():
@@ -230,15 +287,23 @@ def test_send_card_success():
         mock_post.return_value.status_code = 200
         mock_post.return_value.json.return_value = {"code": 0, "msg": "success"}
         result = send_card(card, make_feishu_config())
-        assert result is True
+        assert result.status is PublishStatus.SENT
+        assert result.error is None
 
 
-def test_send_card_timeout():
+def test_read_timeout_is_unknown_and_is_not_retried():
     card = {"msg_type": "interactive", "card": {}}
-    with patch("src.publisher.feishu.httpx.post", side_effect=Exception("Timeout")):
-        with patch("src.publisher.feishu.time.sleep"):
-            result = send_card(card, make_feishu_config(), max_retries=1)
-            assert result is False
+    request = httpx.Request("POST", "https://example.test/webhook")
+    with patch(
+        "src.publisher.feishu.httpx.post",
+        side_effect=httpx.ReadTimeout("response timed out", request=request),
+    ) as mock_post, patch("src.publisher.feishu.time.sleep") as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=3)
+
+    assert result.status is PublishStatus.UNKNOWN
+    assert result.error == "Feishu response timed out; delivery status is unknown"
+    assert mock_post.call_count == 1
+    mock_sleep.assert_not_called()
 
 
 def test_send_card_no_url():
@@ -248,7 +313,8 @@ def test_send_card_no_url():
         feishu_webhook_url="",
     )
     result = send_card(card, cfg)
-    assert result is False
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu webhook URL is not configured"
 
 
 def test_send_card_app_level_error_does_not_retry():
@@ -262,8 +328,41 @@ def test_send_card_app_level_error_does_not_retry():
             json=lambda: {"code": 230001, "msg": "invalid token"},
         )
         result = send_card(card, cfg, max_retries=3)
-    assert result is False
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu API rejected payload: code=230001 msg=invalid token"
     assert mock_post.call_count == 1
+
+
+def test_client_error_fails_without_retry():
+    card = {"msg_type": "interactive", "card": {}}
+    request = httpx.Request("POST", "https://example.test/webhook")
+    response = httpx.Response(400, request=request)
+
+    with patch("src.publisher.feishu.httpx.post", return_value=response) as mock_post, patch(
+        "src.publisher.feishu.time.sleep"
+    ) as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=3)
+
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu webhook returned HTTP 400"
+    assert mock_post.call_count == 1
+    mock_sleep.assert_not_called()
+
+
+def test_invalid_success_response_fails_without_retry():
+    card = {"msg_type": "interactive", "card": {}}
+    request = httpx.Request("POST", "https://example.test/webhook")
+    response = httpx.Response(200, text="not-json", request=request)
+
+    with patch("src.publisher.feishu.httpx.post", return_value=response) as mock_post, patch(
+        "src.publisher.feishu.time.sleep"
+    ) as mock_sleep:
+        result = send_card(card, make_feishu_config(), max_retries=3)
+
+    assert result.status is PublishStatus.FAILED
+    assert result.error == "Feishu returned an invalid JSON response"
+    assert mock_post.call_count == 1
+    mock_sleep.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

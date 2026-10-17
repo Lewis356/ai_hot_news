@@ -1,14 +1,17 @@
 name: Daily AI News Digest
 
-# 触发条件:
-#   1. 每天 UTC 16:00(=北京时间次日 00:00)自动跑
-#   2. Actions 页面手动触发(用来测试 secrets 是否配对)
 on:
   schedule:
-    - cron: "0 16 * * *"
+    # 北京时间每天 00:07，避开整点高峰。
+    - cron: "7 16 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "只抓取和评估，不发送飞书消息"
+        required: true
+        default: false
+        type: boolean
 
-# 防止上一次还没跑完就叠加触发(网络/AI 卡住时偶尔会拖过 24h)
 concurrency:
   group: daily-digest
   cancel-in-progress: false
@@ -19,62 +22,73 @@ permissions:
 jobs:
   digest:
     runs-on: ubuntu-latest
-    timeout-minutes: 10   # 留足 LLM 评估时间(本地测 ~16s,云端首跑可能冷启 + 重试)
+    timeout-minutes: 10
+    env:
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
+      FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+      FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: "3.11"
-          cache: "pip"
+          cache: pip
           cache-dependency-path: requirements.txt
-
-      # repo 根就是 ai_hot_news/,不要再 working-directory。
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       - name: Prepare logs directory
-        # .gitignore 排除了 logs/,runner checkout 后不会存在,setup_logging 会写失败。
         run: mkdir -p logs
 
-      - name: Verify required secrets
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
+      - name: Validate runtime configuration
         run: |
-          set -euo pipefail
-          if [ -z "$DEEPSEEK_API_KEY" ]; then
-            echo "::error::DEEPSEEK_API_KEY is not set — go to Settings → Secrets → Actions."
-            exit 1
-          fi
-          if [ -z "$FEISHU_WEBHOOK_URL" ]; then
-            echo "::error::FEISHU_WEBHOOK_URL is not set."
-            exit 1
-          fi
-          echo "Secrets present. Provider: $(python -c 'import yaml,sys; print(yaml.safe_load(open(\"config.yaml\"))[\"ai\"][\"provider\"])')"
+          python - <<'PY'
+          import os
+          from src.config import load_config, validate_runtime_config
+
+          config = load_config(".")
+          validate_runtime_config(
+              config,
+              publish=os.environ.get("DRY_RUN", "false").lower() != "true",
+          )
+          print(f"Configuration valid. Provider: {config.ai.get('provider', 'deepseek')}")
+          PY
 
       - name: Run daily digest
-        env:
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OLLAMA_BASE_URL: ${{ secrets.OLLAMA_BASE_URL }}
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          FEISHU_WEBHOOK_SECRET: ${{ secrets.FEISHU_WEBHOOK_SECRET }}
-          # 强制 UTF-8,日志/卡片里的中文不被 mojibake
-          PYTHONIOENCODING: utf-8
-          PYTHONUTF8: "1"
-        run: python run_once.py
+        run: |
+          if [ "${DRY_RUN}" = "true" ]; then
+            python run_once.py --dry-run
+          else
+            python run_once.py
+          fi
+
+      - name: Write run summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## 每日 AI 新闻" >> "$GITHUB_STEP_SUMMARY"
+          summary="$(grep -h 'METRICS ' logs/*.log 2>/dev/null | tail -n 1 || true)"
+          if [ -n "$summary" ]; then
+            echo "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "本次运行未产生汇总日志，请查看失败步骤。" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: digest-log-${{ github.run_id }}
           path: logs/

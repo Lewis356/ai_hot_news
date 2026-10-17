@@ -1,8 +1,9 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
-from src.evaluator.deepseek_evaluator import DeepSeekEvaluator
+
 from src.config import Config
+from src.evaluator.deepseek_evaluator import DeepSeekEvaluator
 from src.models import NewsItem
 
 
@@ -32,9 +33,9 @@ def test_parses_json_response():
     mock_choice = SimpleNamespace()
     mock_choice.message = SimpleNamespace()
     mock_choice.message.content = (
-        '{"items": [{"title": "测试新闻", "url": "http://a.com/1", '
-        '"source": "SourceA", "chinese_summary": "这是一条测试新闻。", '
-        '"importance": 8, "keywords": ["AI", "测试"], "published_at": "2026-06-23"}]}'
+        '{"items": [{"candidate_id": 1, "title": "测试新闻", '
+        '"chinese_summary": "这是一条测试新闻。", '
+        '"importance": 8, "keywords": ["AI", "测试"]}]}'
     )
     mock_resp = SimpleNamespace(choices=[mock_choice])
 
@@ -58,6 +59,8 @@ def test_uses_deepseek_base_url():
         call_kwargs = mc.call_args[1]
         assert call_kwargs["base_url"] == "https://api.deepseek.com/v1"
         assert call_kwargs["api_key"] == "sk-test"
+        assert call_kwargs["timeout"] == 60.0
+        assert call_kwargs["max_retries"] == 0
 
 
 def test_handles_api_error():

@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from unittest.mock import patch, MagicMock
-from src.evaluator.ollama_evaluator import OllamaEvaluator
+from unittest.mock import MagicMock, patch
+
 from src.config import Config
+from src.evaluator.ollama_evaluator import OllamaEvaluator
 from src.models import NewsItem
 
 
@@ -33,9 +34,9 @@ def test_parses_clean_json_response():
     mock_httpx.__exit__ = MagicMock(return_value=False)
     mock_httpx.post.return_value.json.return_value = {
         "choices": [{"message": {"content": (
-            '{"items": [{"title": "测试新闻", "url": "http://a.com/1", '
-            '"source": "SourceA", "chinese_summary": "这是一条测试新闻。", '
-            '"importance": 8, "keywords": ["AI", "测试"], "published_at": "2026-06-23"}]}'
+            '{"items": [{"candidate_id": 1, "title": "测试新闻", '
+            '"chinese_summary": "这是一条测试新闻。", '
+            '"importance": 8, "keywords": ["AI", "测试"]}]}'
         )}}]
     }
     mock_httpx.post.return_value.raise_for_status = MagicMock()
@@ -56,9 +57,9 @@ def test_parses_markdown_wrapped_json():
     mock_httpx.__exit__ = MagicMock(return_value=False)
     mock_httpx.post.return_value.json.return_value = {
         "choices": [{"message": {"content": (
-            '```json\n{"items": [{"title": "测试", "url": "http://a.com/1", '
-            '"source": "S", "chinese_summary": "摘要。", "importance": 5, '
-            '"keywords": ["AI"], "published_at": "2026-06-23"}]}\n```'
+            '```json\n{"items": [{"candidate_id": 1, "title": "测试", '
+            '"chinese_summary": "摘要。", "importance": 5, '
+            '"keywords": ["AI"]}]}\n```'
         )}}]
     }
     mock_httpx.post.return_value.raise_for_status = MagicMock()

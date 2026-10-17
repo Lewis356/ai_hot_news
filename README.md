@@ -7,11 +7,11 @@
 
 ## ✨ 特性
 
-- 📰 **多源聚合** — 并行抓取 RSS 源(36 氪、量子位、TechCrunch AI 等)。
+- 📰 **中外平衡** — 并行抓取量子位、InfoQ 中文、雷峰网、TechCrunch、OpenAI、Hugging Face。
 - 🤖 **多模型评估** — DeepSeek / OpenAI / Ollama / Rule-based 四档可切换。
 - 🎯 **智能过滤** — 标题去重 + 24h 时间窗,只保留值得看的。
 - 🎨 **飞书卡片** — 排名徽章(🥇🥈🥉)、五档重要性 emoji、配色随头条变化。
-- 🔐 **HMAC 签名** — 飞书 Webhook 支持签名校验,防止伪造。
+- 🔐 **强制签名** — 正式推送必须配置飞书 HMAC 签名密钥。
 - 🛡️ **输出沙箱** — LLM 返回值自动 clamp / 转义,杜绝 Markdown 注入。
 - 📊 **可观测** — 每阶段耗时、每源成功率、单行 METRICS 汇总。
 - 🧪 **测试完备** — `pytest -q` 全绿;新增 HMAC、转义、sanitize、卡片美化测试。
@@ -32,15 +32,16 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# 编辑 .env,至少填一个 AI Provider key 和 FEISHU_WEBHOOK_URL
+# 编辑 .env,填入所选 AI Provider key、飞书 Webhook URL 和签名密钥
 ```
 
 > ⚠️ **安全提醒** — `.env` 包含真实密钥,**绝不提交**。如果曾被泄露,立刻轮换 DeepSeek / Feishu 凭证。
 
-### 3. 干跑一次
+### 3. 先干跑，再实发
 
 ```bash
-python run_once.py
+python run_once.py --dry-run  # 不发送飞书
+python run_once.py            # 验证通过后真实发送
 ```
 
 ### 4. 启动每日定时任务
@@ -51,11 +52,11 @@ python run_once.py
 python main.py
 ```
 
-默认在 `config.yaml` 中配置的 `cron_hour:cron_minute` 时刻运行(默认 00:00)。
+默认在 `config.yaml` 指定时区的 `cron_hour:cron_minute` 运行(默认北京时间 00:07)。
 
 #### 方式 B — GitHub Actions 零运维(推荐)
 
-项目自带 [`.github/workflows/daily-digest.yml`](.github/workflows/daily-digest.yml),每天 UTC 16:00(=北京时间 00:00)自动跑。详细步骤见 **[DEPLOY.md](DEPLOY.md)**——只需 3 步:push 代码、配 3 个 Secret、点一次 "Run workflow" 验证。
+项目自带 [`.github/workflows/daily-digest.yml`](.github/workflows/daily-digest.yml),每天 UTC 16:07(=北京时间 00:07)自动跑。详细步骤见 **[DEPLOY.md](DEPLOY.md)**。
 
 | 维度 | 本地 main.py | GitHub Actions |
 |---|---|---|
@@ -110,8 +111,9 @@ config.yaml + .env
 
 | 字段 | 默认值 | 说明 |
 |---|---|---|
-| `rss_sources` | 3 个 | RSS 源 `{name, url}` 列表 |
-| `schedule.cron_hour` / `cron_minute` | `0` / `0` | 每日触发时间(24h) |
+| `rss_sources` | 6 个 | RSS 源 `{name, url}` 列表 |
+| `schedule.cron_hour` / `cron_minute` | `0` / `7` | 指定时区内的每日触发时间 |
+| `schedule.timezone` | `Asia/Shanghai` | 本地调度与卡片时间所用时区 |
 | `ai.provider` | `deepseek` | Provider 选择 |
 | `ai.top_n` | `10` | 卡片入选数量 |
 | `ai.max_candidates` | `60` | 喂给 LLM 的最大候选数 |
@@ -133,7 +135,7 @@ pytest -q
 A: 飞书群 → 群机器人 → 添加机器人 → 选"自定义机器人" → "安全设置" 勾选"签名校验",复制 secret 粘贴到 `.env` 的 `FEISHU_WEBHOOK_SECRET`。
 
 **Q: Pipeline 全程失败,如何排查?**
-A: 看 `logs/daily_YYYY-MM-DD.log`,最末一行 `METRICS {...}` 给出每阶段耗时与数量。
+A: 看 `logs/daily_YYYY-MM-DD.log` 最末的 `METRICS {...}`；`status`、逐源状态、实际 Provider 和投递结果都会记录。失败会返回非零退出码，使 GitHub Actions 正确标红。
 
 **Q: 怎么换 RSS 源?**
 A: 编辑 `config.yaml` 的 `rss_sources`,保持 `{name, url}` 格式即可。

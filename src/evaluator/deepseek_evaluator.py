@@ -2,16 +2,12 @@
 from __future__ import annotations
 
 from loguru import logger
+from openai import OpenAI
 
-from src.models import EvaluatedItem, NewsItem
-from src.evaluator.base import BaseEvaluator
 from src.evaluator._prompting import SYSTEM_PROMPT, build_user_prompt
+from src.evaluator.base import BaseEvaluator
 from src.evaluator.json_parser import extract_json_from_text
-
-try:
-    from openai import OpenAI
-except ImportError:  # pragma: no cover — requirements.txt pins openai
-    OpenAI = None
+from src.models import EvaluatedItem, NewsItem
 
 
 class DeepSeekEvaluator(BaseEvaluator):
@@ -22,23 +18,23 @@ class DeepSeekEvaluator(BaseEvaluator):
     def evaluate(self, items: list[NewsItem], config) -> list[EvaluatedItem]:
         if not items:
             return []
-        if OpenAI is None:
-            raise ImportError(
-                "openai package is required for DeepSeek provider. "
-                "Install: pip install openai"
-            )
-
         ai_cfg = config.ai
         top_n = ai_cfg.get("top_n", 10)
         max_candidates = ai_cfg.get("max_candidates", 60)
         max_retries = ai_cfg.get("max_retries", 3)
+        request_timeout = float(ai_cfg.get("request_timeout", 60.0))
         model = ai_cfg.get("deepseek_model", "deepseek-chat")
         candidates = items[:max_candidates]
 
         if len(items) > max_candidates:
             logger.info(f"Truncated {len(items)} candidates to {max_candidates}")
 
-        client = OpenAI(api_key=config.deepseek_api_key, base_url=self.BASE_URL)
+        client = OpenAI(
+            api_key=config.deepseek_api_key,
+            base_url=self.BASE_URL,
+            timeout=request_timeout,
+            max_retries=0,
+        )
         prompt = build_user_prompt(candidates, top_n)
 
         def _call() -> str:
@@ -51,12 +47,17 @@ class DeepSeekEvaluator(BaseEvaluator):
                 max_tokens=4096,
                 temperature=0.1,
             )
-            return response.choices[0].message.content
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("DeepSeek returned an empty response")
+            return content
 
         raw = self._retry_call(_call, max_retries=max_retries, label="DeepSeek")
         if raw is None:
             return []
         data = extract_json_from_text(raw)
-        results = self._build_evaluated_items(data.get("items", []), top_n)
+        results = self._build_evaluated_items(
+            data.get("items", []), candidates, top_n
+        )
         logger.info(f"DeepSeek evaluated: {len(results)} items (Top {top_n})")
         return results
