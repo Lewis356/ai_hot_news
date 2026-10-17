@@ -55,6 +55,19 @@ jobs:
       - name: Prepare logs directory
         run: mkdir -p logs
 
+      - name: Check publishing secrets
+        if: env.DRY_RUN != 'true'
+        shell: bash
+        run: |
+          missing=0
+          for name in FEISHU_WEBHOOK_URL FEISHU_WEBHOOK_SECRET; do
+            if [ -z "${!name}" ]; then
+              echo "::error title=Missing GitHub Secret::${name} is not configured"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Validate runtime configuration
         run: |
           python - <<'PY'
@@ -91,7 +104,7 @@ jobs:
 
       - name: Upload log on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: digest-log-${{ github.run_id }}
           path: logs/
